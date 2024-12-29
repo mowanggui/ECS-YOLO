@@ -1,0 +1,42 @@
+nc: 13  # number of classes
+depth_multiple: 1.0  # model depth multiple
+width_multiple: 1.0  # layer channel multiple
+anchors: 3
+
+# YOLOv3-tiny backbone
+backbone:
+  # [from, number, module, args]
+  [[-1, 1, Conv_1, [64, 7, 2]],  # 0 P1/2
+   [-1, 1, BasicBlock_2, [64,3, 2]], #1 P2/4
+   [-1, 1, Concat_res2, [128, 3, 2]], #2 P3/8
+   [-1, 1, Concat_res2, [256, 3, 2]], #3 P4/16
+   [-1, 1, Concat_res2, [512, 3, 2]], #4 P5/32
+  ]
+
+# YOLOv3-tiny head
+head:
+  [[-1, 1, Conv_2, [256, 1, 1, None, 1, False]], #5 input_proj.2
+    [-1, 1, AIFI, [256, 8]], #6
+    [-1, 1, BasicBlock_2, [256, 1, 1]] ,  #7, Y5, lateral_convs.0
+
+    [-1, 1, Sample, [None, 2, 'nearest' ]], #8
+    [3, 1, Conv_2, [256, 1, 1, None, 1, False]],  #9 input_proj.1
+    [[-2, -1], 1, Concat, [2]], #10
+    [-1, 1, RepC3, [256]],  #11, fpn_blocks.0
+    [-1, 1, BasicBlock_2, [256, 1, 1]],   #12, Y4, lateral_convs.
+
+    [-1, 1, Sample, [None, 2, 'nearest' ]], #13
+    [2, 1, Conv_2, [256, 1, 1, None, 1, False]],  #14 input_proj.0
+    [[-2, -1], 1, Concat, [2]],  # cat backbone P4
+    [-1, 1, RepC3, [256]],    #X3 (16), fpn_blocks.1
+
+    [-1, 1, BasicBlock_2, [256, 3, 2]],   #17, downsample_convs.0
+    [[-1, 12], 1, Concat, [2]],  #cat Y4
+    [-1, 1, RepC3, [256]],    #F4 (19), pan_blocks.0
+
+    [-1, 1, BasicBlock_2, [256, 3, 2]],   #20, downsample_convs.1
+    [[-1, 7], 1, Concat, [2]],  #cat Y5
+    [-1, 1, RepC3, [256]],    #F5 (22), pan_blocks.1
+
+    [[16, 19, 22], 1, DDetect, [nc]],  # Detect(P3, P4, P5)
+  ]

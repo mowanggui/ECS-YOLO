@@ -1,0 +1,9 @@
+train: ./bdd100k/train.txt
+val: ./bdd100k/val.txt
+test: ./bdd100k/test.txt
+
+# numble of classes
+nc: 13
+
+# class name
+names: ['person','rider','car','bus','truck','bike','motor','tl_green','tl_red','tl_yellow','tl_none','t_sign','train']

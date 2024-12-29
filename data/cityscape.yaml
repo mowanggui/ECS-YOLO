@@ -1,0 +1,13 @@
+train: ./cityscape/yolo_train.txt
+val: ./cityscape/yolo_val.txt
+test: ./cityscape/yolo_test.txt
+
+
+# numble of classes
+nc: 38
+
+# class name
+names: ['rectification border','sky','road','building','static','pole','train','ground','traffic light','traffic sign',
+        'sidewalk','terrain','bus','vegetation','car','fence','person','motorcycle','cargroup','parking','dynamic',
+        'persongroup','license plate','bicycle','rider','wall','bicyclegroup','truck','trailer','bridge','polegroup',
+        'ridergroup','guard rail','caravan','tunnel','truckgroup','rail track','motorcyclegroup']

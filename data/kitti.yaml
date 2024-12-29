@@ -1,0 +1,16 @@
+train: ./kitti/train.txt
+val: ./kitti/val.txt
+test: ./kitti/test.txt
+
+
+# numble of classes
+nc: 6
+
+# class name
+names:
+  0: car
+  1: cyclist
+  2: truck
+  3: van
+  4: pedestrian
+  5: tram

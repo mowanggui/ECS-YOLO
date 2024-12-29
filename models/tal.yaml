@@ -1,0 +1,68 @@
+nc: 13  # number of classes
+depth_multiple: 1.0  # model depth multiple
+width_multiple: 1.0  # layer channel multiple
+anchors: 3
+
+# YOLOv3-tiny backbone
+backbone:
+  # [from, number, module, args]
+  [[-1, 1, Silence, []],  # 0
+   [-1, 1, Conv_1, [64, 7, 2]],  # 1
+   [-1, 1, BasicBlock_2, [64, 3, 2]], #2
+   [-1, 2, BasicBlock_2, [64, 3, 1]], #3
+   [-1, 1, BasicBlock_2, [128, 3, 2]], #4
+   [-1, 3, BasicBlock_2, [128, 3, 1]], #5
+   [-1, 1, BasicBlock_2, [256, 3, 2]], #6
+   [-1, 5, BasicBlock_2, [256, 3, 1]], #7
+   [-1, 1, BasicBlock_2, [512, 3, 2]], #8
+   [-1, 2, BasicBlock_2, [512, 3, 1]], #9
+
+  ]
+
+# YOLOv3-tiny head
+head:
+  [[-1, 1, BasicBlock_1, [256, 1]], #10
+    [-1, 1, Sample, [None, 2, 'nearest']], #11
+    [[-1, 7], 1, Concat, [2]],  # cat backbone P4
+    [-1, 1, BasicBlock_2, [256, 3, 1]],  # 13 (P4/16-large)
+
+    [-1, 1, BasicBlock_1, [256, 1]], #14
+    [-1, 1, Sample, [ None, 2, 'nearest']],#15
+    [[-1, 5], 1, Concat, [2]],  # cat backbone P4
+    [-1, 1, BasicBlock_2, [128, 3, 1]],  # 17 (P3/8-medium)
+    [-1, 1, EMA, [8]],  # 18
+
+    [-1, 1, BasicBlock_2, [128, 3, 2]], #19
+    [[-1, 14], 1, Concat, [2]], #20
+    [-1, 1, BasicBlock_2, [256, 3, 1]], #21
+    [-1, 1, EMA, [8]],  #22
+
+    [-1, 1, BasicBlock_2, [256, 3, 2]], #23
+    [[-1, 10], 1, Concat, [2]], #24
+    [-1, 1, BasicBlock_2, [512, 3, 1]], #25
+    [-1, 1, EMA, [8]],  #26
+
+   [ 5, 1, CBLinear, [ [ 128 ] ] ], # 27
+   [ 7, 1, CBLinear, [ [ 128,256 ] ] ], # 28
+   [ 9, 1, CBLinear, [ [ 128,256,512 ] ] ], # 29
+
+   [ 0, 1, Conv_1, [ 64, 7, 2 ] ],  # 30
+   [ -1, 1, BasicBlock_2, [ 64, 3, 2 ] ], #31
+   [ -1, 2, BasicBlock_2, [ 64, 3, 1 ] ], #32
+   [ -1, 1, BasicBlock_2, [ 128, 3, 2 ] ], #33
+   [ -1, 3, BasicBlock_2, [ 128, 3, 1 ] ], #34
+
+   [ [ 27, 28, 29, -1 ], 1, CBFuse, [ [ 0, 0, 0 ] ] ], # 35
+
+   [ -1, 1, BasicBlock_2, [ 256, 3, 2 ] ], #36
+   [ -1, 5, BasicBlock_2, [ 256, 3, 1 ] ], #37
+
+   [ [ 28, 29, -1 ], 1, CBFuse, [ [ 1, 1 ] ] ], #38
+
+   [ -1, 1, BasicBlock_2, [ 512, 3, 2 ] ], #39
+   [ -1, 2, BasicBlock_2, [ 512, 3, 1 ] ], #40
+
+   [ [ 29, -1 ], 1, CBFuse, [ [ 2 ] ] ], #41
+
+  [[35, 38, 41, 18, 22, 26], 1, DualDDetect, [nc]],  # Detect(P3, P4, P5)
+  ]

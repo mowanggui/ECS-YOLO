@@ -1,0 +1,47 @@
+{
+    "os": "Windows-10-10.0.22631-SP0",
+    "python": "3.8.13",
+    "heartbeatAt": "2024-05-23T12:42:43.347094",
+    "startedAt": "2024-05-23T12:42:39.956439",
+    "docker": null,
+    "cuda": null,
+    "args": [],
+    "state": "running",
+    "program": "D:\\PycharmProjects\\EMS-YOLO-main\\train.py",
+    "codePathLocal": "train.py",
+    "codePath": "train.py",
+    "host": "JMcomputer",
+    "username": "13120",
+    "executable": "D:\\anaconda3\\envs\\coco\\python.exe",
+    "cpu_count": 10,
+    "cpu_count_logical": 16,
+    "cpu_freq": {
+        "current": 2500.0,
+        "min": 0.0,
+        "max": 2500.0
+    },
+    "cpu_freq_per_core": [
+        {
+            "current": 2500.0,
+            "min": 0.0,
+            "max": 2500.0
+        }
+    ],
+    "disk": {
+        "/": {
+            "total": 793.7548789978027,
+            "used": 313.9678192138672
+        }
+    },
+    "gpu": "NVIDIA GeForce RTX 4060 Ti",
+    "gpu_count": 1,
+    "gpu_devices": [
+        {
+            "name": "NVIDIA GeForce RTX 4060 Ti",
+            "memory_total": 17175674880
+        }
+    ],
+    "memory": {
+        "total": 31.84244155883789
+    }
+}

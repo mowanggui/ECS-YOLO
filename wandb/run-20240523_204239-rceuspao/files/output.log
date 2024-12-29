@@ -1,0 +1,351 @@
+                 from  n    params  module                                  arguments
+  0                -1  1       467  models.common.Conv_1                    [3, 64, 7, 2]
+  1                -1  1     13888  models.common.BasicBlock_5              [64, 64, 3, 2]
+  2                -1  1     31104  models.common.Concat_res6               [64, 128, 3, 2]
+  3                -1  1    119552  models.common.Concat_res6               [128, 256, 3, 2]
+  4                -1  1    468480  models.common.Concat_res6               [256, 512, 3, 2]
+  5                -1  1    934912  models.common.BasicBlock_1n             [512, 256, 1]
+  6                -1  1    534528  models.common.BasicBlock_5              [256, 512, 3, 1]
+  7                -2  1     83328  models.common.BasicBlock_5              [256, 128, 1, 1]
+  8                -1  1         0  models.common.Sample                    [None, 2, 'nearest']
+  9           [-1, 3]  1         0  models.common.Concat                    [2]
+ 10                -1  1    269824  models.common.BasicBlock_5              [384, 256, 3, 1]
+ 11           [10, 6]  1     41580  models.yolo.Detect                      [13, [[10, 14, 23, 27, 37, 58], [81, 82, 135, 169, 344, 319]], [256, 512]]
+Model Summary: 215 layers, 2497663 parameters, 2497663 gradients, 0.0 GFLOPs
+Scaled weight_decay = 0.0005
+[34m[1moptimizer:[39m[22m SGD with parameter groups 25 weight, 52 weight (no decay), 27 bias
+[34m[1malbumentations: [39m[22mBlur(always_apply=False, p=0.01, blur_limit=(3, 7)), MedianBlur(always_apply=False, p=0.01, blur_limit=(3, 7)), ToGray(always_apply=False, p=0.01), CLAHE(always_apply=False, p=0.01, clip_limit=(1, 4.0), tile_grid_size=(8, 8))
+[34m[1mtrain: [39m[22mScanning 'bdd100k\train.cache' images and labels... 10000 found, 0 missing, 0 empty, 0 corrupted: 100%|██████████| 10000/10000 [00:00<?, ?it/s]
+[34m[1mval: [39m[22mScanning 'bdd100k\val.cache' images and labels... 3000 found, 0 missing, 0 empty, 0 corrupted: 100%|██████████| 3000/3000 [00:00<?, ?it/s]
+[34m[1mAutoAnchor: [39m[22m2.39 anchors/target, 0.987 Best Possible Recall (BPR). Current anchors are a good fit to dataset
+Image sizes 640 train, 640 val
+Using 8 dataloader workers
+Logging results to [1mruns\train\exp30
+Starting training for 300 epochs...
+     Epoch   gpu_mem       box       obj       cls    labels  img_size
+  0%|          | 0/625 00:00
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+     0/299     5.83G    0.1219    0.2032   0.03778       517       640: 100%|██████████| 625/625 04:49
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+               Class     Images     Labels          P          R     mAP@.5 mAP@.5:.95: 100%|██████████| 188/188 00:28
+                 all       3000      56121       0.85    0.00651    0.00128   0.000246
+     Epoch   gpu_mem       box       obj       cls    labels  img_size
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+     1/299     5.83G    0.1161    0.2023   0.03081       544       640: 100%|██████████| 625/625 04:32
+
+
+
+
+
+
+
+
+
+
+
+
+
+               Class     Images     Labels          P          R     mAP@.5 mAP@.5:.95: 100%|██████████| 188/188 00:27
+                 all       3000      56121      0.624     0.0108    0.00434   0.000902
+     Epoch   gpu_mem       box       obj       cls    labels  img_size
+
+
+
+
+
+
+
+
+
+
+
+

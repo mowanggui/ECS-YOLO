@@ -14,18 +14,14 @@ if str(ROOT) not in sys.path:
 if platform.system() != 'Windows':
     ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
-
-import sys
-sys.path.append('/home/algointern/project/EMS-YOLO-main/utils')
-
 from models.common import *
 from models.common2 import AIFI, RepC3
 from models.experimental import *
-from general2 import LOGGER, check_version, check_yaml, make_divisible, print_args, v10postprocess
-from plots2 import feature_visualization
-from torch_utils2 import (fuse_conv_and_bn, initialize_weights, model_info, profile, scale_img, select_device,
+from utils.general2 import LOGGER, check_version, check_yaml, make_divisible, print_args, v10postprocess
+from utils.plots2 import feature_visualization
+from utils.torch_utils2 import (fuse_conv_and_bn, initialize_weights, model_info, profile, scale_img, select_device,
                                 time_sync)
-from tal.anchor_generator import make_anchors, dist2bbox
+from utils.tal.anchor_generator import make_anchors, dist2bbox
 
 try:
     import thop  # for FLOPs computation
@@ -113,9 +109,13 @@ class DDetect(nn.Module):
 
     def forward(self, x):
         shape = x[0].shape  # BCHW
+        # print("a")
+        # print(type(x))
         for i in range(self.nl):
             x[i] = torch.cat(((self.cv2[i](x[i])).sum(dim=0) / (self.cv2[i](x[i])).size()[0],
                               (self.cv3[i](x[i])).sum(dim=0) / (self.cv3[i](x[i])).size()[0]), 1)
+        # print("b")
+        # print(type(x))
         if self.training:
             return x
         elif self.dynamic or self.shape != shape:
@@ -125,6 +125,8 @@ class DDetect(nn.Module):
         box, cls = torch.cat([xi.view(shape[1], self.no, -1) for xi in x], 2).split((self.reg_max * 4, self.nc), 1)
         dbox = dist2bbox(self.dfl(box), self.anchors.unsqueeze(0), xywh=True, dim=1) * self.strides
         y = torch.cat((dbox, cls.sigmoid()), 1)
+        # print("c")
+        # print(type((y, x)))
         return y if self.export else (y, x)
 
     def bias_init(self):
@@ -564,14 +566,14 @@ class v10Detect(DDetect):
             # print(type(one2one))
             if not self.export:
                 # return {"one2many": one2many, "one2one": one2one}
-                return ModelOutput(one2many, one2one)
+                return ModelOutput(one2many=one2many, one2one=one2one)
             else:
                 assert (self.max_det != -1)
                 boxes, scores, labels = v10postprocess(one2one.permute(0, 2, 1), self.max_det, self.nc)
                 return torch.cat([boxes, scores.unsqueeze(-1), labels.unsqueeze(-1).to(boxes.dtype)], dim=-1)
         else:
             # return {"one2many": one2many, "one2one": one2one}
-            return ModelOutput(one2many, one2one)
+            return ModelOutput(one2many=one2many, one2one=one2one)
 
     def bias_init(self):
         super().bias_init()
@@ -587,6 +589,7 @@ class v10Detect(DDetect):
 class ModelOutput(NamedTuple):
     one2many: torch.Tensor
     one2one: torch.Tensor
+
 
 class ASFF_DDetect(DDetect):
     def __init__(self, nc=80, ch=()):

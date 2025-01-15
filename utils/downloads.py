@@ -2,8 +2,6 @@
 """
 Download utils
 """
-import sys
-sys.path.append('/home/algointern/project/EMS-YOLO-main/utils')
 
 import os
 import platform

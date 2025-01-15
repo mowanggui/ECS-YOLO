@@ -14,10 +14,6 @@ import sys
 from pathlib import Path
 from threading import Thread
 
-import sys
-sys.path.append('/home/algointern/project/EMS-YOLO-main/utils')
-sys.path.append('/home/algointern/project/EMS-YOLO-main/models')
-
 import numpy as np
 import torch
 from tqdm import tqdm
@@ -29,15 +25,15 @@ if str(ROOT) not in sys.path:
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 '''===================3..加载自定义模块============================'''
-from common import DetectMultiBackend
-from callbacks import Callbacks
-from dataloader import create_dataloader
-from general import (LOGGER, NCOLS, box_iou, check_dataset, check_img_size, check_requirements, check_yaml,
+from models.common import DetectMultiBackend
+from utils.callbacks import Callbacks
+from utils.datasets import create_dataloader
+from utils.general import (LOGGER, NCOLS, box_iou, check_dataset, check_img_size, check_requirements, check_yaml,
                            coco80_to_coco91_class, colorstr, increment_path, non_max_suppression, print_args,
                            scale_coords, xywh2xyxy, xyxy2xywh)
-from metrics import ConfusionMatrix, ap_per_class
-from plots import output_to_target, plot_images, plot_val_study
-from torch_utils import select_device, time_sync
+from utils.metrics import ConfusionMatrix, ap_per_class
+from utils.plots import output_to_target, plot_images, plot_val_study
+from utils.torch_utils import select_device, time_sync
 
 '''===============================================二、保存信息==================================================='''
 '''======================1.保存预测信息到txt文件====================='''
@@ -215,6 +211,7 @@ def run(data, # 数据集配置文件地址 包含数据集的路径、类别个
     # 通过 COCO 数据集的文件夹组织结构判断当前数据集是否为 COCO 数据集
     is_coco = isinstance(data.get('val'), str) and data['val'].endswith('coco/val2017.txt')  # COCO dataset
     # 确定检测的类别数目
+    # print(type(data))
     nc = 1 if single_cls else int(data['nc'])  # number of classes
     # 计算mAP相关参数
     # 设置iou阈值 从0.5-0.95取10个(0.05间隔)   iou vector for mAP@0.5:0.95
@@ -439,6 +436,8 @@ def run(data, # 数据集配置文件地址 包含数据集的路径、类别个
     if not training:
         shape = (batch_size, 3, imgsz, imgsz)
         LOGGER.info(f'Speed: %.1fms pre-process, %.1fms inference, %.1fms NMS per image at shape {shape}' % t)
+        FPS = 1000 / sum(t)
+        LOGGER.info(f'FPS: {round(FPS, 3)}')
 
     '''===6.9 保存验证结果==='''
     # Plots
@@ -515,7 +514,7 @@ def run(data, # 数据集配置文件地址 包含数据集的路径、类别个
 def parse_opt():
     parser = argparse.ArgumentParser()
     parser.add_argument('--data', type=str, default=ROOT / 'data/bdd100k.yaml', help='dataset.yaml path')
-    parser.add_argument('--weights', nargs='+', type=str, default=ROOT / 'runs/train/exp35/weights/best_pruned_bn_0.3.pt', help='model.pt path(s)')
+    parser.add_argument('--weights', nargs='+', type=str, default=ROOT / 'runs/train/exp55/weights/best.pt', help='model.pt path(s)')
     parser.add_argument('--batch-size', type=int, default=32, help='batch size')
     parser.add_argument('--imgsz', '--img', '--img-size', type=int, default=640, help='inference size (pixels)')
     parser.add_argument('--conf-thres', type=float, default=0.001, help='confidence threshold')
@@ -536,7 +535,9 @@ def parse_opt():
     parser.add_argument('--dnn', action='store_true', help='use OpenCV DNN for ONNX inference')
     # 解析上述参数
     opt = parser.parse_args()
+    # print(opt.data)
     opt.data = check_yaml(opt.data)  # check YAML
+    # print(opt.data)
     # |或 左右两个变量有一个为True 左边变量就为True
     opt.save_json |= opt.data.endswith('coco.yaml')
     opt.save_txt |= opt.save_hybrid

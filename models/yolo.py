@@ -25,17 +25,14 @@ if str(ROOT) not in sys.path:  # sys.path即当前python环境可以运行的路
 from models.common import *  # yolo的网络结构(yolo)
 from models.common2 import AIFI, RepC3
 
-import sys
-sys.path.append('/home/algointern/project/EMS-YOLO-main/utils')
-
 from models.experimental import *  # 导入在线下载模块
-from autoanchor import check_anchor_order  # 导入检查anchors合法性的函数
-from general import LOGGER, check_version, check_yaml, make_divisible, print_args  # 定义了一些常用的工具函数
-from plots import feature_visualization  # 定义了Annotator类，可以在图像上绘制矩形框和标注信息
-from torch_utils import (copy_attr, fuse_conv_and_bn, initialize_weights, model_info, scale_img, select_device,
+from utils.autoanchor import check_anchor_order  # 导入检查anchors合法性的函数
+from utils.general import LOGGER, check_version, check_yaml, make_divisible, print_args  # 定义了一些常用的工具函数
+from utils.plots import feature_visualization  # 定义了Annotator类，可以在图像上绘制矩形框和标注信息
+from utils.torch_utils import (copy_attr, fuse_conv_and_bn, initialize_weights, model_info, scale_img, select_device,
                                time_sync)  # 定义了一些与PyTorch有关的工具函数
 
-#from spikingjelly.activation_based import neuron, functional, surrogate, layer
+from spikingjelly.activation_based import neuron, functional, surrogate, layer
 
 # 导入thop包 用于计算FLOPs
 try:
@@ -78,6 +75,7 @@ class Detect(nn.Module):
         self.m = nn.ModuleList(Snn_Conv2d(x, self.no * self.na, 1) for x in ch)  # output conv
         # inplace: 一般都是True，默认不使用AWS，Inferentia加速
         self.inplace = inplace  # use in-place ops (e.g. slice assignment)
+        self.w = nn.ModuleList(Conv_7(1, 1) for x in ch)  # output conv
 
     # 如果模型不训练那么将会对这些预测得到的参数进一步处理,然后输出,可以方便后期的直接调用
     # 包含了三个信息pred_box [x,y,w,h] pred_conf[confidence] pre_cls[cls0,cls1,cls2,...clsn]
@@ -88,12 +86,23 @@ class Detect(nn.Module):
 
         z = []  # inference output 推理输出
         for i in range(self.nl):
+            # print("0")
+            # print(x[i].shape)
+            # print("1")
             x[i] = self.m[i](x[i])  # conv
+            # print(x[i].shape)
+            # print("2")
             times, bs, _, ny, nx = x[i].shape  # x(bs,255,20,20) to x(bs,3,20,20,85)
+            x[i] = self.w[i](x[i])
+            # print(x[i].shape)
+            # print("3")
             # 维度重排列: bs, 先验框组数, 检测框行数, 检测框列数, 属性数 + 分类数
-            x[i] = x[i].view(times, bs, self.na, self.no, ny, nx).permute(0, 1, 2, 4, 5, 3).contiguous()
+            # x[i] = x[i].view(times, bs, self.na, self.no, ny, nx).permute(0, 1, 2, 4, 5, 3).contiguous()
+            x[i] = x[i].view(bs, self.na, self.no, ny, nx).permute(0, 1, 3, 4, 2).contiguous()
+            # print(x[i].shape)
+            # print("4")
 
-            x[i] = x[i].sum(dim=0) / x[i].size()[0]
+            # x[i] = x[i].sum(dim=0) / x[i].size()[0]
             '''
             向前传播时需要将相对坐标转换到grid绝对坐标系中
             '''
@@ -382,9 +391,10 @@ class Model(nn.Module):
         LOGGER.info('Fusing layers... ')
         for m in self.model.modules():
             # 如果当前层是卷积层Conv且有bn结构, 那么就调用fuse_conv_and_bn函数讲conv和bn进行融合, 加速推理
-            if isinstance(m, (Conv, DWConv)) and hasattr(m, 'bn'):
+            if isinstance(m, (Conv, Conv_1, DWConv)) and hasattr(m, 'bn'):
                 # 更新卷积层
-                m.conv = fuse_conv_and_bn(m.conv, m.bn)  # update conv
+                # print(m)
+                m.conv = fuse_conv_and_bn(m.conv, m.bn.bn)  # update conv
                 # 移除bn
                 delattr(m, 'bn')  # remove batchnorm
                 # 更新前向传播
@@ -456,11 +466,12 @@ def parse_model(d, ch, use_cupy):  # model_dict, input_channels(3)
         if m in [Conv, GhostConv, Bottleneck, GhostBottleneck, SPP, SPPF, DWConv, MixConv2d, Focus, CrossConv,
                  BottleneckCSP, C3, C3TR, C3SPP, C3Ghost, Conv_2, snn_resnet, Concat_res3, Concat_res4, EMA,
                  BasicBlock, BasicBlock_1, BasicBlock_2, BasicBlock_3, Conv_A, CSABlock, LIAFBlock, Conv_LIAF,
-                 Bottleneck_2, Conv_3, StarBlock, StarBlock_2, StarBlock_3, StarBlock_4,StarNet,
+                 Bottleneck_2, Conv_3, StarBlock, StarBlock_2, StarBlock_3, StarBlock_4, StarBlock_1,
                  TCSABlock, BasicTCSA, ConcatBlock_ms, BasicBlock_ms, Conv_1, Concat_res2, HAMBlock, ConcatCSA_res2,
                  BasicBlock_ms1, BoT3, BasicBlock_2C3, BasicBlock_1C3, Concat_res2C3, BasicBlock_1C2f, BasicBlock_2C2f,
                  BasicBlock_1n, BasicBlock_1m, BasicBlock_4, Concat_res5, AIFI, RepC3, Silence, ResNetLayerBasic,
-                 BasicBlock_5, Concat_res6, MobileNetV3, BasicBlock_6, BasicBlock_1s, Bottleneck_3, StarBlock_5]:
+                 BasicBlock_5, Concat_res6, MobileNetV3, BasicBlock_6, BasicBlock_1s, Bottleneck_3, StarBlock_5,
+                 StarBlock_1s, MStarBlock, MStarBlock_2, StarBlock_2C2f, Bottleneck_1, Bottleneck_4]:
             # c1: 当前层的输入channel数; c2: 当前层的输出channel数(初定); ch: 记录着所有层的输出channel数
             c1, c2 = ch[f], args[0]
             use_cupy = use_cupy
@@ -477,7 +488,7 @@ def parse_model(d, ch, use_cupy):  # model_dict, input_channels(3)
             # [in_channels, out_channels, Bottleneck个数, Bool(shortcut有无标记)]
             if m in [BottleneckCSP, C3, C3TR, C3Ghost, BoT3, BasicBlock_2C3, BasicBlock_1C3, Concat_res2C3,
                      BasicBlock_1C2f,
-                     BasicBlock_2C2f, RepC3]:
+                     BasicBlock_2C2f, RepC3, StarBlock_2C2f]:
                 # 在第二个位置插入bottleneck个数n
                 args.insert(2, n)  # number of repeats
                 # 恢复默认值1

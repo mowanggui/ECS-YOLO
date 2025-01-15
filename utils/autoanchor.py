@@ -10,10 +10,7 @@ import torch
 import yaml
 from tqdm import tqdm
 
-import sys
-sys.path.append('/home/algointern/project/EMS-YOLO-main/utils')
-
-from general import LOGGER, colorstr, emojis
+from utils.general import LOGGER, colorstr, emojis
 
 PREFIX = colorstr('AutoAnchor: ')
 

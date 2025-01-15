@@ -23,16 +23,12 @@ from PIL import ExifTags, Image, ImageOps
 from torch.utils.data import DataLoader, Dataset, dataloader, distributed
 from tqdm import tqdm
 
-import sys
-sys.path.append('/home/algointern/project/EMS-YOLO-main/utils')
-
-
-from augmentations2 import (Albumentations, augment_hsv, classify_albumentations, classify_transforms, copy_paste,
+from utils.augmentations2 import (Albumentations, augment_hsv, classify_albumentations, classify_transforms, copy_paste,
                                  letterbox, mixup, random_perspective)
-from general2 import (DATASETS_DIR, LOGGER, NUM_THREADS, TQDM_BAR_FORMAT, check_dataset, check_requirements,
+from utils.general2 import (DATASETS_DIR, LOGGER, NUM_THREADS, TQDM_BAR_FORMAT, check_dataset, check_requirements,
                            check_yaml, clean_str, cv2, is_colab, is_kaggle, segments2boxes, unzip_file, xyn2xy,
                            xywh2xyxy, xywhn2xyxy, xyxy2xywhn)
-from torch_utils2 import torch_distributed_zero_first
+from utils.torch_utils2 import torch_distributed_zero_first
 
 # Parameters
 HELP_URL = 'See https://github.com/ultralytics/yolov5/wiki/Train-Custom-Data'

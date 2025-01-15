@@ -15,17 +15,14 @@ from PIL import Image
 from torch.cuda import amp
 import torch.nn.functional as F
 
-#from spikingjelly.activation_based import neuron, functional, surrogate, layer
+from spikingjelly.activation_based import neuron, functional, surrogate, layer
 
-import sys
-sys.path.append('/home/algointern/project/EMS-YOLO-main/utils')
-
-from general import (LOGGER, check_requirements, check_suffix, colorstr, increment_path, make_divisible,
+from utils.general import (LOGGER, check_requirements, check_suffix, colorstr, increment_path, make_divisible,
                            non_max_suppression, scale_coords, xywh2xyxy, xyxy2xywh)
-from plots import Annotator, colors, save_one_box
-from torch_utils import time_sync
+from utils.plots import Annotator, colors, save_one_box
+from utils.torch_utils import time_sync
 
-from dataloader import exif_transpose, letterbox
+from utils.datasets import exif_transpose, letterbox
 
 thresh = 0.5  # 0.5 # neuronal threshold 神经元阈值
 lens = 0.5  # 0.5 # hyper-parameters of approximate function 近似函数的超参数

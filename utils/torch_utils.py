@@ -18,10 +18,9 @@ import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 
-import sys
-sys.path.append('/home/algointern/project/EMS-YOLO-main/utils')
+import models.common
+from utils.general import LOGGER
 
-from general import LOGGER
 
 try:
     import thop  # for FLOPs computation
@@ -194,13 +193,13 @@ def prune(model, amount=0.3):
 
 def fuse_conv_and_bn(conv, bn):
     # Fuse convolution and batchnorm layers https://tehnokv.com/posts/fusing-batchnorm-and-conv/
-    fusedconv = nn.Conv2d(conv.in_channels,
-                          conv.out_channels,
-                          kernel_size=conv.kernel_size,
-                          stride=conv.stride,
-                          padding=conv.padding,
-                          groups=conv.groups,
-                          bias=True).requires_grad_(False).to(conv.weight.device)
+    fusedconv = models.common.Snn_Conv2d(conv.in_channels,
+                                  conv.out_channels,
+                                  kernel_size=conv.kernel_size,
+                                  stride=conv.stride,
+                                  padding=conv.padding,
+                                  groups=conv.groups,
+                                  bias=True).requires_grad_(False).to(conv.weight.device)
 
     # prepare filters
     w_conv = conv.weight.clone().view(conv.out_channels, -1)

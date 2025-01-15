@@ -9,11 +9,8 @@ import random
 import cv2
 import numpy as np
 
-import sys
-sys.path.append('/home/algointern/project/EMS-YOLO-main/utils')
-
-from general import LOGGER, check_version, colorstr, resample_segments, segment2box
-from metrics import bbox_ioa
+from utils.general import LOGGER, check_version, colorstr, resample_segments, segment2box
+from utils.metrics import bbox_ioa
 
 
 class Albumentations:

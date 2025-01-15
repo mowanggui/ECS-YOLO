@@ -2,8 +2,6 @@
 """
 Plotting utils
 """
-import sys
-sys.path.append('/home/algointern/project/EMS-YOLO-main/utils')
 
 import math
 import os
@@ -19,9 +17,9 @@ import seaborn as sn
 import torch
 from PIL import Image, ImageDraw, ImageFont
 
-from general import (LOGGER, Timeout, check_requirements, clip_coords, increment_path, is_ascii, is_chinese,
+from utils.general import (LOGGER, Timeout, check_requirements, clip_coords, increment_path, is_ascii, is_chinese,
                            try_except, user_config_dir, xywh2xyxy, xyxy2xywh)
-from metrics import fitness
+from utils.metrics import fitness
 
 # Settings
 CONFIG_DIR = user_config_dir()  # Ultralytics settings dir
@@ -89,7 +87,8 @@ class Annotator:
         if self.pil or not is_ascii(label):
             self.draw.rectangle(box, width=self.lw, outline=color)  # box
             if label:
-                w, h = self.font.getsize(label)  # text width, height
+                # w, h = self.font.getsize(label)  # text width, height
+                x, y, w, h = self.font.getbbox(label)
                 outside = box[1] - h >= 0  # label fits outside box
                 self.draw.rectangle([box[0],
                                      box[1] - h if outside else box[1],
@@ -115,7 +114,8 @@ class Annotator:
 
     def text(self, xy, text, txt_color=(255, 255, 255)):
         # Add text to image (PIL-only)
-        w, h = self.font.getsize(text)  # text width, height
+        # w, h = self.font.getsize(text)  # text width, height
+        x, y, w, h = self.font.getbbox(text)
         self.draw.text((xy[0], xy[1] - h + 1), text, fill=txt_color, font=self.font)
 
     def result(self):

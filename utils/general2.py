@@ -31,14 +31,9 @@ import torch
 import torchvision
 import yaml
 
-
-import sys
-sys.path.append('/home/algointern/project/EMS-YOLO-main/utils')
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
 from utils import TryExcept, emojis
-from downloads2 import gsutil_getsize
-from metrics2 import box_iou, fitness
+from utils.downloads2 import gsutil_getsize
+from utils.metrics2 import box_iou, fitness
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[1]  # YOLO root directory
@@ -129,12 +124,12 @@ def set_logging(name=LOGGING_NAME, verbose=True):
             name: {
                 "class": "logging.StreamHandler",
                 "formatter": name,
-                "level": level,}},
+                "level": level, }},
         "loggers": {
             name: {
                 "level": level,
                 "handlers": [name],
-                "propagate": False,}}})
+                "propagate": False, }}})
 
 
 set_logging(LOGGING_NAME)  # run before defining LOGGER
@@ -580,7 +575,7 @@ def check_amp(model):
     f = ROOT / 'data' / 'images' / 'bus.jpg'  # image to check
     im = f if f.exists() else 'https://ultralytics.com/images/bus.jpg' if check_online() else np.ones((640, 640, 3))
     try:
-        #assert amp_allclose(deepcopy(model), im) or amp_allclose(DetectMultiBackend('yolo.pt', device), im)
+        # assert amp_allclose(deepcopy(model), im) or amp_allclose(DetectMultiBackend('yolo.pt', device), im)
         LOGGER.info(f'{prefix}checks passed ✅')
         return True
     except Exception:
@@ -685,8 +680,9 @@ def one_cycle(y1=0.0, y2=1.0, steps=100):
 
 def one_flat_cycle(y1=0.0, y2=1.0, steps=100):
     # lambda function for sinusoidal ramp from y1 to y2 https://arxiv.org/pdf/1812.01187.pdf
-    #return lambda x: ((1 - math.cos(x * math.pi / steps)) / 2) * (y2 - y1) + y1
-    return lambda x: ((1 - math.cos((x - (steps // 2)) * math.pi / (steps // 2))) / 2) * (y2 - y1) + y1 if (x > (steps // 2)) else y1
+    # return lambda x: ((1 - math.cos(x * math.pi / steps)) / 2) * (y2 - y1) + y1
+    return lambda x: ((1 - math.cos((x - (steps // 2)) * math.pi / (steps // 2))) / 2) * (y2 - y1) + y1 if (
+                x > (steps // 2)) else y1
 
 
 def colorstr(*input):
@@ -1137,11 +1133,12 @@ def imshow(path, im):
 
 cv2.imread, cv2.imwrite, cv2.imshow = imread, imwrite, imshow  # redefine
 
+
 # Variables ------------------------------------------------------------------------------------------------------------
 
-#v10postprocess
+# v10postprocess
 def v10postprocess(preds, max_det, nc=80):
-    assert(4 + nc == preds.shape[-1])
+    assert (4 + nc == preds.shape[-1])
     boxes, scores = preds.split([4, nc], dim=-1)
     max_scores = scores.amax(dim=-1)
     max_scores, index = torch.topk(max_scores, max_det, dim=-1)

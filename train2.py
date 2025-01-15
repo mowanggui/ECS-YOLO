@@ -22,28 +22,24 @@ if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))  # add ROOT to PATH
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
-import sys
-sys.path.append('/home/algointern/project/EMS-YOLO-main/utils')
-sys.path.append('/home/algointern/project/EMS-YOLO-main/models')
-
 import val2 as validate  # for end-of-epoch mAP
-from experimental2 import attempt_load
-from yolo_snn import Model
-from autoanchor import check_anchors
-from autobatch2 import check_train_batch_size
-from callbacks2 import Callbacks
-from dataloaders import create_dataloader
-from downloads2 import attempt_download, is_url
-from general2 import (LOGGER, TQDM_BAR_FORMAT, check_amp, check_dataset, check_file, check_img_size,
+from models.experimental2 import attempt_load
+from models.yolo_snn import Model
+from utils.autoanchor import check_anchors
+from utils.autobatch2 import check_train_batch_size
+from utils.callbacks2 import Callbacks
+from utils.dataloaders import create_dataloader
+from utils.downloads2 import attempt_download, is_url
+from utils.general2 import (LOGGER, TQDM_BAR_FORMAT, check_amp, check_dataset, check_file, check_img_size,
                            check_suffix, check_yaml, colorstr, get_latest_run, increment_path, init_seeds,
                            intersect_dicts, labels_to_class_weights, labels_to_image_weights, methods,
                            one_cycle, one_flat_cycle, print_args, print_mutation, strip_optimizer, yaml_save)
-from loggerss import Loggers
-from loggerss.comet.comet_utils import check_comet_resume
-from loss_tal import ComputeLoss
-from metrics2 import fitness
-from plots2 import plot_evolve
-from torch_utils2 import (EarlyStopping, ModelEMA, de_parallel, select_device, smart_DDP,
+from utils.loggerss import Loggers
+from utils.loggerss.comet.comet_utils import check_comet_resume
+from utils.loss_tal import ComputeLoss
+from utils.metrics2 import fitness
+from utils.plots2 import plot_evolve
+from utils.torch_utils2 import (EarlyStopping, ModelEMA, de_parallel, select_device, smart_DDP,
                                smart_optimizer, smart_resume, torch_distributed_zero_first)
 
 LOCAL_RANK = int(os.getenv('LOCAL_RANK', -1))  # https://pytorch.org/docs/stable/elastic/run.html

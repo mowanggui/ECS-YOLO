@@ -6,14 +6,11 @@ import pkg_resources as pkg
 import torch
 from torch.utils.tensorboard import SummaryWriter
 
-import sys
-sys.path.append('/home/algointern/project/EMS-YOLO-main/utils')
-
-from general2 import LOGGER, colorstr, cv2
-from loggerss.clearml.clearml_utils import ClearmlLogger
-from loggerss.wandb.wandb_utils import WandbLogger
-from plots2 import plot_images, plot_labels, plot_results
-from torch_utils2 import de_parallel
+from utils.general2 import LOGGER, colorstr, cv2
+from utils.loggerss.clearml.clearml_utils import ClearmlLogger
+from utils.loggerss.wandb.wandb_utils import WandbLogger
+from utils.plots2 import plot_images, plot_labels, plot_results
+from utils.torch_utils2 import de_parallel
 
 LOGGERS = ('csv', 'tb', 'wandb', 'clearml', 'comet')  # *.csv, TensorBoard, Weights & Biases, ClearML
 RANK = int(os.getenv('RANK', -1))

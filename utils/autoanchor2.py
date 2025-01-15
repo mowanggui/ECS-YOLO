@@ -6,12 +6,7 @@ import yaml
 from tqdm import tqdm
 
 from utils import TryExcept
-
-
-import sys
-sys.path.append('/home/algointern/project/EMS-YOLO-main/utils')
-
-from general2 import LOGGER, TQDM_BAR_FORMAT, colorstr
+from utils.general2 import LOGGER, TQDM_BAR_FORMAT, colorstr
 
 PREFIX = colorstr('AutoAnchor: ')
 

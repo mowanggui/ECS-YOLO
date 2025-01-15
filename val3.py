@@ -10,27 +10,22 @@ from tqdm import tqdm
 
 import models
 
-
-import sys
-sys.path.append('/home/algointern/project/EMS-YOLO-main/utils')
-sys.path.append('/home/algointern/project/EMS-YOLO-main/models')
-
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # YOLO root directory
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))  # add ROOT to PATH
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
-from common3 import DetectMultiBackend
-from yolo_snn import ModelOutput
-from callbacks2 import Callbacks
-from dataloaders import create_dataloader
-from general2 import (LOGGER, TQDM_BAR_FORMAT, Profile, check_dataset, check_img_size, check_requirements,
+from models.common3 import DetectMultiBackend
+from models.yolo_snn import ModelOutput
+from utils.callbacks2 import Callbacks
+from utils.dataloaders import create_dataloader
+from utils.general2 import (LOGGER, TQDM_BAR_FORMAT, Profile, check_dataset, check_img_size, check_requirements,
                             check_yaml, coco80_to_coco91_class, colorstr, increment_path, non_max_suppression,
                             print_args, scale_boxes, xywh2xyxy, xyxy2xywh, v10postprocess)
-from metrics2 import ConfusionMatrix, ap_per_class, box_iou
-from plots2 import output_to_target, plot_images, plot_val_study
-from torch_utils2 import select_device, smart_inference_mode
+from utils.metrics2 import ConfusionMatrix, ap_per_class, box_iou
+from utils.plots2 import output_to_target, plot_images, plot_val_study
+from utils.torch_utils2 import select_device, smart_inference_mode
 
 
 def save_one_txt(predn, save_conf, shape, file):

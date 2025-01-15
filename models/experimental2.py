@@ -4,10 +4,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-import sys
-sys.path.append('/home/algointern/project/EMS-YOLO-main/utils')
-
-from downloads import attempt_download
+from utils.downloads import attempt_download
 
 
 class Sum(nn.Module):

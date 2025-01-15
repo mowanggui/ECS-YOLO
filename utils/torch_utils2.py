@@ -14,12 +14,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-
-import sys
-sys.path.append('/home/algointern/project/EMS-YOLO-main/utils')
-
-from general2 import LOGGER, check_version, colorstr, file_date, git_describe
-from lion2 import Lion
+from utils.general2 import LOGGER, check_version, colorstr, file_date, git_describe
+from utils.lion2 import Lion
 
 LOCAL_RANK = int(os.getenv('LOCAL_RANK', -1))  # https://pytorch.org/docs/stable/elastic/run.html
 RANK = int(os.getenv('RANK', -1))

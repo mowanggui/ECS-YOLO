@@ -5,9 +5,6 @@ import warnings
 from copy import copy
 from pathlib import Path
 
-import sys
-sys.path.append('/home/algointern/project/EMS-YOLO-main/utils')
-
 import cv2
 import numpy as np
 import pandas as pd
@@ -19,17 +16,19 @@ from torch import Tensor
 from torch.cuda import amp
 import torch.nn.functional as F
 
+from visualizer import get_local
+
 from einops import rearrange
 
-from general import (LOGGER, check_requirements, check_suffix, colorstr, increment_path, make_divisible,
+from utils.general import (LOGGER, check_requirements, check_suffix, colorstr, increment_path, make_divisible,
                            non_max_suppression, scale_coords, xywh2xyxy, xyxy2xywh)
-from plots import Annotator, colors, save_one_box
-from torch_utils import time_sync
+from utils.plots import Annotator, colors, save_one_box
+from utils.torch_utils import time_sync
 
-from dataloader import exif_transpose, letterbox
+from utils.datasets import exif_transpose, letterbox
 # from test import RFAConv
 # from test import ScConv
-# from spikingjelly.activation_based import layer
+from spikingjelly.activation_based import layer
 
 # from spikingjelly.clock_driven.neuron import (
 #     MultiStepParametricLIFNode,
@@ -83,49 +82,69 @@ class ActFun(torch.autograd.Function):
 act_fun = ActFun.apply
 
 
-class mem_update(nn.Module):
-    def __init__(self, act=False):
-        super(mem_update, self).__init__()
-        # self.actFun= torch.nn.LeakyReLU(0.2, inplace=False)
-        self.actFun = nn.SiLU()
-        # silu(x)=x*σ(x),where σ(x) is logistic sigmoid
-        # logistic sigmoid:sig(x)=1/(1+exp(-x))
-        self.act = act
+# class mem_update(nn.Module):
+#     def __init__(self, act=False):
+#         super(mem_update, self).__init__()
+#         # self.actFun= torch.nn.LeakyReLU(0.2, inplace=False)
+#         self.actFun = nn.SiLU()
+#         # silu(x)=x*σ(x),where σ(x) is logistic sigmoid
+#         # logistic sigmoid:sig(x)=1/(1+exp(-x))
+#         self.act = act
+#
+#     def forward(self, x):
+#         mem = torch.zeros_like(x[0]).to(x.device)
+#         # 该语句的主要作用是生成一个值全为0的、维度与输入尺寸相同的矩阵。
+#         # torch.zeros_like(input)相当于torch.zeros(input.size(),dtype=input.dtype,layout=input.layout, device=input.device)
+#         spike = torch.zeros_like(x[0]).to(x.device)
+#         output = torch.zeros_like(x)
+#         mem_old = 0
+#         for i in range(time_window):
+#             # range(1)->[0]
+#             if i >= 1:
+#                 # .detach() 返回一个新的Variable，从当前计算图中分离下来的，但是仍指向原变量的存放位置,不同之处只是requires_grad为false，得到的这个Variable永远不需要计算其梯度，不具有grad。
+#                 # 即使之后重新将它的requires_grad置为true,它也不会具有梯度grad。
+#                 # mem = mem_old * decay * (1-spike.detach()) + x[i]
+#                 mem = self.jit_neuronal_charge(x[i], mem_old, decay, spike)
+#             else:
+#                 mem = x[i]
+#             if self.act:
+#                 spike = self.actFun(mem)
+#             else:
+#                 spike = act_fun(mem)
+#
+#             mem_old = mem.clone()
+#             output[i] = spike
+#         # print(output[0][0][0][0])
+#         return output
+#
+#     @staticmethod
+#     @torch.jit.script
+#     def jit_neuronal_charge(x: torch.Tensor, mem_old: torch.Tensor, decay: float, spike: torch.Tensor):
+#         return mem_old * decay * (1 - spike.detach()) + x
 
-    def forward(self, x):
-        mem = torch.zeros_like(x[0]).to(x.device)
-        # 该语句的主要作用是生成一个值全为0的、维度与输入尺寸相同的矩阵。
-        # torch.zeros_like(input)相当于torch.zeros(input.size(),dtype=input.dtype,layout=input.layout, device=input.device)
-        spike = torch.zeros_like(x[0]).to(x.device)
-        output = torch.zeros_like(x)
-        mem_old = 0
-        for i in range(time_window):
-            # range(1)->[0]
-            if i >= 1:
-                # .detach() 返回一个新的Variable，从当前计算图中分离下来的，但是仍指向原变量的存放位置,不同之处只是requires_grad为false，得到的这个Variable永远不需要计算其梯度，不具有grad。
-                # 即使之后重新将它的requires_grad置为true,它也不会具有梯度grad。
-                # mem = mem_old * decay * (1-spike.detach()) + x[i]
-                mem = self.jit_neuronal_charge(x[i], mem_old, decay, spike)
-            else:
-                mem = x[i]
-            if self.act:
-                spike = self.actFun(mem)
-            else:
-                spike = act_fun(mem)
 
-            mem_old = mem.clone()
-            output[i] = spike
-        # print(output[0][0][0][0])
-        return output
+class LIFNode(nn.Module):
+    def __init__(self, tau, v_th):
+        super(LIFNode, self).__init__()
+        self.tau = tau
+        self.v_th = v_th
 
     @staticmethod
     @torch.jit.script
-    def jit_neuronal_charge(x: torch.Tensor, mem_old: torch.Tensor, decay: float, spike: torch.Tensor):
-        return mem_old * decay * (1 - spike.detach()) + x
+    def state_update(neu_tau: float, u_in: torch.Tensor,
+                     last_spikes: torch.Tensor, x_in: torch.Tensor, v_th: float):
+        u_out = neu_tau * u_in * (1 - last_spikes) + x_in
+        crt_spikes = act_fun(u_out - v_th)
+        return u_out, crt_spikes
 
-
-
-
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # [T,N,C,H,W]
+        u_t = torch.zeros(x.shape[1:], device=x.device)  # [N,C,H,W]
+        out = torch.zeros(x.shape, device=x.device)
+        for step in range(x.shape[0]):
+            u_t, out[step, ...] = self.state_update(self.tau, u_t, out[max(step - 1, 0), ...],
+                                                    x[step, ...], self.v_th)
+        return out
 
 
 # class mem_update(nn.Module):
@@ -214,79 +233,81 @@ class mem_update(nn.Module):
 #         return mem_old * decay * (1 - spike.detach()) + x
 
 
-# class mem_update(nn.Module):
-#     def __init__(self, act=False, ecs_tau: float = 5., alpha: float = 0.75, beta: float = 0.25, ECS=False):
-#         super(mem_update, self).__init__()
-#         # self.actFun= torch.nn.LeakyReLU(0.2, inplace=False)
-#         self.ECS = ECS
-#         self.actFun = nn.SiLU()
-#         # silu(x)=x*σ(x),where σ(x) is logistic sigmoid
-#         # logistic sigmoid:sig(x)=1/(1+exp(-x))
-#         self.act = act
-#         # self.alpha = nn.Parameter(torch.tensor(alpha))
-#         self.alpha = alpha
-#         # self.beta = nn.Parameter(torch.tensor(beta))
-#         self.beta =beta
-#         self.ecs_tau = ecs_tau
-#         self.spread = None
-#
-#     def forward(self, x):
-#         mem = torch.zeros_like(x[0]).to(x.device)
-#         # 该语句的主要作用是生成一个值全为0的、维度与输入尺寸相同的矩阵。
-#         # torch.zeros_like(input)相当于torch.zeros(input.size(),dtype=input.dtype,layout=input.layout, device=input.device)
-#         spike = torch.zeros_like(x[0]).to(x.device)
-#         output = torch.zeros_like(x)
-#         mem_old = 0
-#         ecs = 0.
-#         fecs = 0.
-#         if self.spread is None:
-#             self.InitEcsSpread(x[0])
-#         for i in range(time_window):
-#             # range(1)->[0]
-#             if i >= 1:
-#                 # .detach() 返回一个新的Variable，从当前计算图中分离下来的，但是仍指向原变量的存放位置,不同之处只是requires_grad为false，得到的这个Variable永远不需要计算其梯度，不具有grad。
-#                 # 即使之后重新将它的requires_grad置为true,它也不会具有梯度grad。
-#                 # mem = mem_old * decay * (1-spike.detach()) + x[i]
-#                 mem = self.jit_neuronal_charge(x[i], mem_old, decay, spike, fecs)
-#             else:
-#                 mem = x[i] + fecs
-#             if self.act:
-#                 spike = self.actFun(mem)
-#             else:
-#                 spike = act_fun(mem)
-#
-#             ecs = self.alpha * self.spread(spike) + (1. - 1. / self.ecs_tau) * ecs
-#             fecs = self.beta * torch.tanh(ecs)
-#
-#             mem_old = mem.clone()
-#             output[i] = spike
-#         # print(output[0][0][0][0])
-#         return output
-#
-#     def InitEcsSpread(self, x: torch.Tensor):
-#         if x.ndim == 4:
-#             shape = x.shape
-#             self.spread = nn.Sequential(
-#                 # nn.Conv2d(shape[1], shape[1],
-#                 #           kernel_size=3, padding=1, device=x.device, groups=shape[1]),
-#                 # layer.Conv2d(shape[1], shape[1],
-#                 #              kernel_size=3, padding=1, groups=shape[1]),
-#                 Conv2d(shape[1], shape[1],
-#                        kernel_size=3, padding=1, device=x.device, groups=shape[1]),
-#                 # nn.Conv2d(shape[1], shape[1], kernel_size=1, device=x.device)
-#                 # layer.Conv2d(shape[1], shape[1], kernel_size=1)
-#                 Conv2d(shape[1], shape[1], kernel_size=1, device=x.device)
-#             )
-#         elif x.ndim == 2:
-#             self.spread = layer.Linear(x.shape[1], x.shape[1])
-#         else:
-#             print('\nx.ndim=' + x.ndim)
-#             raise NotImplementedError
-#     @staticmethod
-#     @torch.jit.script
-#     def jit_neuronal_charge(x: torch.Tensor, mem_old: torch.Tensor, decay: float, spike: torch.Tensor,
-#                              fecs: torch.Tensor):
-#         return mem_old * decay * (1 - spike.detach()) + x + fecs
+class mem_update(nn.Module):
+    def __init__(self, act=False, ecs_tau: float = 5., alpha: float = 0.75, beta: float = 0.25, ECS=False):
+        super(mem_update, self).__init__()
+        # self.actFun= torch.nn.LeakyReLU(0.2, inplace=False)
+        self.ECS = ECS
+        self.actFun = nn.SiLU()
+        # silu(x)=x*σ(x),where σ(x) is logistic sigmoid
+        # logistic sigmoid:sig(x)=1/(1+exp(-x))
+        self.act = act
+        # self.alpha = nn.Parameter(torch.tensor(alpha))
+        self.alpha = alpha
+        # self.beta = nn.Parameter(torch.tensor(beta))
+        self.beta =beta
+        self.ecs_tau = ecs_tau
+        self.spread = None
+
+    def forward(self, x):
+        mem = torch.zeros_like(x[0]).to(x.device)
+        # 该语句的主要作用是生成一个值全为0的、维度与输入尺寸相同的矩阵。
+        # torch.zeros_like(input)相当于torch.zeros(input.size(),dtype=input.dtype,layout=input.layout, device=input.device)
+        spike = torch.zeros_like(x[0]).to(x.device)
+        output = torch.zeros_like(x)
+        mem_old = 0
+        ecs = 0.
+        fecs = 0.
+        if self.spread is None:
+            self.InitEcsSpread(x[0])
+        for i in range(time_window):
+            # range(1)->[0]
+            if i >= 1:
+                # .detach() 返回一个新的Variable，从当前计算图中分离下来的，但是仍指向原变量的存放位置,不同之处只是requires_grad为false，得到的这个Variable永远不需要计算其梯度，不具有grad。
+                # 即使之后重新将它的requires_grad置为true,它也不会具有梯度grad。
+                # mem = mem_old * decay * (1-spike.detach()) + x[i]
+                mem = self.jit_neuronal_charge(x[i], mem_old, decay, spike, fecs)
+            else:
+                mem = x[i] + fecs
+            if self.act:
+                spike = self.actFun(mem)
+            else:
+                spike = act_fun(mem)
+
+            ecs = self.alpha * self.spread(spike) + (1. - 1. / self.ecs_tau) * ecs
+            fecs = self.beta * torch.tanh(ecs)
+
+            mem_old = mem.clone()
+            output[i] = spike
+        # print(output[0][0][0][0])
+        return output
+
+    def InitEcsSpread(self, x: torch.Tensor):
+        if x.ndim == 4:
+            shape = x.shape
+            self.spread = nn.Sequential(
+                # nn.Conv2d(shape[1], shape[1],
+                #           kernel_size=3, padding=1, device=x.device, groups=shape[1]),
+                # layer.Conv2d(shape[1], shape[1],
+                #              kernel_size=3, padding=1, groups=shape[1]),
+                Conv2d(shape[1], shape[1],
+                       kernel_size=3, padding=1, device=x.device, groups=shape[1]),
+                # nn.Conv2d(shape[1], shape[1], kernel_size=1, device=x.device)
+                # layer.Conv2d(shape[1], shape[1], kernel_size=1)
+                Conv2d(shape[1], shape[1], kernel_size=1, device=x.device)
+            )
+        elif x.ndim == 2:
+            self.spread = layer.Linear(x.shape[1], x.shape[1])
+        else:
+            print('\nx.ndim=' + x.ndim)
+            raise NotImplementedError
+    @staticmethod
+    @torch.jit.script
+    def jit_neuronal_charge(x: torch.Tensor, mem_old: torch.Tensor, decay: float, spike: torch.Tensor,
+                             fecs: torch.Tensor):
+        # print("ECS")
+        return mem_old * decay * (1 - spike.detach()) + x + fecs
+
 
 class DFL(nn.Module):
     # DFL module
@@ -340,12 +361,12 @@ class ConvBN(torch.nn.Sequential):
 
 class Conv(nn.Module):
     # Standard convolution 标准的卷积
-    def __init__(self, c1, c2, k, s, p=None, g=1, act=True):  # ch_in, ch_out, kernel, stride, padding, groups
+    def __init__(self, c1, c2, k, s, p=None, g=1, ECS=False):  # ch_in, ch_out, kernel, stride, padding, groups
         # groups通道分组的参数，输入通道数、输出通道数必须同时满足被groups整除；
         super().__init__()
         self.conv = Snn_Conv2d(c1, c2, k, s, autopad(k, p), groups=g, bias=False)
         self.bn = batch_norm_2d(c2)
-        self.act = mem_update(act=True)
+        self.act = mem_update(act=True, ECS=ECS)
 
     def forward(self, x):  # 前向传播函数
         return self.act(self.bn(self.conv(x)))
@@ -406,11 +427,11 @@ class Conv_1(nn.Module):
 
 class Conv_2(nn.Module):
     # Standard convolution 标准的卷积
-    def __init__(self, c1, c2, k, s, p=None, g=1, act=True):  # ch_in, ch_out, kernel, stride, padding, groups
+    def __init__(self, c1, c2, k, s, p=None, g=1):  # ch_in, ch_out, kernel, stride, padding, groups
         super().__init__()
         self.conv = Snn_Conv2d(c1, c2, k, s, autopad(k, p), groups=g, bias=False)
         self.bn = batch_norm_2d(c2)
-        self.act = mem_update(act=False) if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
+        self.act = mem_update(act=False)
 
     def forward(self, x):
         return self.bn(self.conv(self.act(x)))
@@ -432,7 +453,7 @@ class Conv_3(nn.Module):
         self.bn = batch_norm_2d(c2)
         # self.bn = layer.BatchNorm2d(c2)
         # 激活函数
-        self.act = mem_update(act=False) if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
+        self.act = mem_update(act=False)
         # self.act = LIFNode(decay, 0) if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
         # self.act = neuron.IFNode(surrogate_function=surrogate.ATan())
         # functional.set_step_mode(self, step_mode='m')
@@ -525,6 +546,21 @@ class Conv_6(nn.Module):
         # print("----------_________---------")
         return self.bn(self.conv(self.act(x)))
 
+class Conv_7(nn.Module):
+    # Standard convolution
+    # init初始化构造函数
+    def __init__(self, k=1, s=1, p=None, g=1, act=True):  # ch_in, ch_out, kernel, stride, padding, groups
+        super().__init__()
+        self.conv = Conv3d(time_window, 1, k, s, autopad(k, p), bias=False)
+        # self.bn = layer.BatchNorm2d(c2)
+        # 激活函数
+
+    def forward(self, x):
+        x = x.permute(1, 0, 2, 3, 4)
+        out = self.conv(x)
+        out = out.squeeze(dim=1)
+        return out
+
 # class Snn_Conv2d(nn.Conv2d):
 #     def __init__(self, in_channels, out_channels, kernel_size, stride=1,
 #                  padding=0, dilation=1, groups=1,
@@ -608,6 +644,26 @@ class Conv2d(nn.Conv2d):
         # print(weight.size(),'=====weight====')
         return self._conv_forward(input, self.weight, self.bias)
 
+class Conv3d(nn.Conv3d):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1,
+                 padding=0, dilation=1, groups=1,
+                 bias=True, padding_mode='zeros', marker='b'):
+        # in_channels参数代表输入特征矩阵的深度即channel，比如输入一张RGB彩色图像，那in_channels = 3；
+        # out_channels参数代表卷积核的个数，使用n个卷积核输出的特征矩阵深度即channel就是n；
+        # kernel_size参数代表卷积核的尺寸，输入可以是int类型如3 代表卷积核的height = width = 3，也可以是tuple类型如(3,  5)代表卷积核的height = 3，width = 5；
+        # stride参数代表卷积核的步距默认为1，和kernel_size一样输入可以是int类型，也可以是tuple类型，这里注意，若为tuple类型即第一个int用于高度尺寸，第二个int用于宽度尺寸；
+        # padding参数代表在输入特征矩阵四周补零的情况默认为0，同样输入可以为int型如1 代表上下方向各补一行0元素，左右方向各补一列0像素（即补一圈0）
+        # ，如果输入为tuple型如(2, 1) 代表在上方补两行下方补两行，左边补一列，右边补一列。可见下图，padding[0]是在H高度方向两侧填充的，padding[1]是在W宽度方向两侧填充的；
+        # dilation参数代表每个点之间有空隙的过滤器。例如，在一个维度上，一个大小为3的过滤器w会对输入的x进行如下计算：w[0] * x[0] + w[1] * x[1] + w[2] * x[2]。
+        # 若dilation = 1，过滤器会计算：w[0] * x[0] + w[1] * x[2] + w[2] * x[4]；换句话说，在不同点之间有一个1的差距。
+        super(Conv3d, self).__init__(in_channels, out_channels, kernel_size, stride, padding, dilation, groups,
+                                     bias, padding_mode)
+        self.marker = marker
+
+    def forward(self, input: Tensor) -> Tensor:
+        # print(weight.size(),'=====weight====')
+        return F.conv3d(input, self.weight, self.bias, self.stride,
+                        self.padding, self.dilation, self.groups)
 
 class batch_norm_2d(nn.Module):
     def __init__(self, num_features, eps=1e-5, momentum=0.1):
@@ -843,6 +899,38 @@ class BasicBlock(nn.Module):
         return (self.cv2(self.cv1(x)) + self.shortcut(x))
 
 
+class Bottleneck_1(nn.Module):
+    def __init__(self, in_channels, out_channels, stride=1, e=4):
+        super(Bottleneck_1, self).__init__()
+        c_ = 1024
+        self.residual_function = nn.Sequential(
+            mem_update(act=False),
+            Snn_Conv2d(in_channels, c_, kernel_size=1, stride=1, bias=False),
+            batch_norm_2d1(c_),
+            mem_update(act=False),
+            Snn_Conv2d(c_, c_, kernel_size=3, stride=stride, padding=1, bias=False, groups=c_),
+            batch_norm_2d(c_),
+            mem_update(act=False),
+            Snn_Conv2d(c_, out_channels, kernel_size=1, stride=1, bias=False),
+            batch_norm_2d1(out_channels),
+        )
+        # self.shortcut=Conv_2(in_channels,out_channels,k=1,s=stride)
+        self.shortcut = nn.Sequential(
+        )
+        if stride != 1 or in_channels != out_channels:
+            self.shortcut = nn.Sequential(
+                nn.MaxPool3d((1, stride, stride), stride=(1, stride, stride)),
+                mem_update(act=False),
+                # EcsLifNode(v_threshold=thresh, step_mode='m'),
+                Snn_Conv2d(in_channels, out_channels, kernel_size=1, stride=1, bias=False),
+                batch_norm_2d(out_channels),
+            )
+
+    def forward(self, x):
+        # print(self.residual_function(x).shape)
+        # print(self.shortcut(x).shape)
+        return (self.residual_function(x) + self.shortcut(x))
+
 class Bottleneck_2(nn.Module):
     def __init__(self, in_channels, out_channels, kernel=3, stride=1, e=4):
         super(Bottleneck_2, self).__init__()
@@ -882,7 +970,7 @@ class Bottleneck_2(nn.Module):
 
 
 class Bottleneck_3(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel=3, stride=1, e=4):
+    def __init__(self, in_channels, out_channels, kernel=3, stride=1, e=6):
         super(Bottleneck_3, self).__init__()
         p = None
         if kernel == 3:
@@ -919,8 +1007,47 @@ class Bottleneck_3(nn.Module):
         return (self.residual_function(x) + self.shortcut(x))
 
 
+class Bottleneck_4(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel=3, stride=1, e=6):
+        super(Bottleneck_4, self).__init__()
+        p = None
+        if kernel == 3:
+            pad = 1
+        if kernel == 1:
+            pad = 0
+        width = int(in_channels * e)
+        self.residual_function = nn.Sequential(
+            mem_update(act=False),
+            Snn_Conv2d(in_channels, width, kernel_size=1, stride=1, bias=False),
+            batch_norm_2d1(width),
+            mem_update(act=False),
+            Snn_Conv2d(width, width, kernel_size=kernel, stride=stride, padding=1, bias=False, groups=width),
+            batch_norm_2d(width),
+            mem_update(act=False),
+            Snn_Conv2d(width, out_channels, kernel_size=1, stride=1, bias=False),
+            batch_norm_2d1(out_channels),
+        )
+        # self.shortcut=Conv_2(in_channels,out_channels,k=1,s=stride)
+        self.shortcut = nn.Sequential(
+        )
+        if in_channels < out_channels:
+            self.shortcut = nn.Sequential(
+                mem_update(act=False),
+                Snn_Conv2d(in_channels, out_channels - in_channels, kernel_size=1, stride=1, bias=False),
+                batch_norm_2d(out_channels - in_channels),
+            )
+        self.pools = nn.MaxPool3d((1, stride, stride), stride=(1, stride, stride))
+
+    # @get_local('mem_update.forward')
+    def forward(self, x):
+        temp = self.shortcut(x)
+        out = torch.cat((temp, x), dim=2)
+        out = self.pools(out)
+        return self.residual_function(x) + out
+
+
 class BasicBlock_1(nn.Module):  #
-    def __init__(self, in_channels, out_channels, stride=1, e=0.5):
+    def __init__(self, in_channels, out_channels, stride=1, ECS=False):
         super().__init__()
         # c_ = int(out_channels * e)  # hidden channels  
         c_ = 1024
@@ -943,6 +1070,7 @@ class BasicBlock_1(nn.Module):  #
                 batch_norm_2d(out_channels),
             )
 
+    # @get_local('mem_update.forward')
     def forward(self, x):
         # print("BasicBlock_1")
         # print(x.dtype)
@@ -1052,10 +1180,10 @@ class BasicBlock_1s(nn.Module):  #
 
 
 class BasicBlock_2(nn.Module):
-    def __init__(self, in_channels, out_channels, k_size=3, stride=1, add=True):
+    def __init__(self, in_channels, out_channels, k_size=3, stride=1):
         super().__init__()
         p = None
-        self.add = add
+        # self.add = add
         if k_size == 3:
             pad = 1
         if k_size == 1:
@@ -1084,10 +1212,11 @@ class BasicBlock_2(nn.Module):
                 batch_norm_2d(out_channels),
             )
 
+    # @get_local('mem_update.forward')
     def forward(self, x):
         # print(self.residual_function(x).shape)
         # print(self.shortcut(x).shape)
-        return (self.residual_function(x) + self.shortcut(x)) if self.add else self.residual_function(x)
+        return (self.residual_function(x) + self.shortcut(x))
 
 
 class BasicBlock_3(nn.Module):
@@ -1323,9 +1452,9 @@ class shortcut(nn.Module):
 
 
 class Concat_res2(nn.Module):  #
-    def __init__(self, in_channels, out_channels, k_size=3, stride=1, e=0.5):
+    def __init__(self, in_channels, out_channels, k_size=3, stride=1, ECS=False):
         super().__init__()
-        c_ = int(out_channels * e)  # hidden channels
+        # c_ = int(out_channels * e)  # hidden channels
         if k_size == 3:
             pad = 1
         if k_size == 1:
@@ -1351,6 +1480,7 @@ class Concat_res2(nn.Module):  #
             )
         self.pools = nn.MaxPool3d((1, stride, stride), stride=(1, stride, stride))
 
+    # @get_local('mem_update.forward')
     def forward(self, x):
         temp = self.shortcut(x)
         out = torch.cat((temp, x), dim=2)
@@ -1643,8 +1773,7 @@ class ContextGuideFusionModule(nn.Module):
         if inc[0] != inc[1]:
             self.adjust_conv = Snn_Conv2d(inc[0], inc[1], 1)
 
-
-        # self.se = ELA(inc[1] * 2)
+        self.se = ELA(inc[1] * 2)
         # self.se = MHSA(inc[1] * 2, inc[1] * 2, 4)
 
     def forward(self, x):
@@ -1652,7 +1781,7 @@ class ContextGuideFusionModule(nn.Module):
         ans = torch.ones_like(x1)
         x0 = self.adjust_conv(x0)
         x_concat = torch.cat([x0, x1], dim=self.d)
-        # x_concat = self.se(x_concat)
+        x_concat = self.se(x_concat)
         x0_weight, x1_weight = torch.split(x_concat, [x0.size()[2], x1.size()[2]], dim=self.d)
         x0_weight = x0 * x0_weight
         x1_weight = x1 * x1_weight
@@ -1667,9 +1796,9 @@ class ContextGuideFusionModulev2(nn.Module):
         if inc[0] != inc[1]:
             self.adjust_conv = Snn_Conv2d(inc[0], inc[1], 1)
 
-        #self.convs = nn.ModuleList(
-        #    [Snn_Conv2d(inc[1], inc[1], 3, 1, 1) for _ in range(2)]
-        #)
+        # self.convs = nn.ModuleList(
+        #     [Snn_Conv2d(inc[1], inc[1], 3, 1, 1) for _ in range(2)]
+        # )
         self.convs = Snn_Conv2d(inc[1], inc[1], 3, 1, 1)
 
         self.se = EMA(inc[1] * 2)
@@ -1683,18 +1812,19 @@ class ContextGuideFusionModulev2(nn.Module):
         x_concat = self.se(x_concat)
         x0_weight, x1_weight = torch.split(x_concat, [x0.size()[2], x1.size()[2]], dim=self.d)
         for i, z in enumerate([x0_weight, x1_weight]):
-            #ans = ans * self.convs[i](z)
+            # ans = ans * self.convs[i](z)
             ans = ans * self.convs(z)
         x0_weight = x0 * x0_weight
         x1_weight = x1 * x1_weight
         return torch.cat([x0 + x1_weight + ans, x1 + x0_weight + ans], dim=self.d)
+
 
 '''===========2.DetectMultiBackend： ================'''
 
 
 class DetectMultiBackend(nn.Module):
     # YOLOv5 MultiBackend class for python inference on various backends
-    def __init__(self, weights='yolov5s.pt', device=None, dnn=True, fuse=True):
+    def __init__(self, weights='yolov5s.pt', device=None, dnn=True, fp16=False, fuse=True):
         # Usage:
         #   PyTorch:      weights = *.pt
         #   TorchScript:            *.torchscript.pt
@@ -1712,6 +1842,7 @@ class DetectMultiBackend(nn.Module):
         pt, onnx, tflite, pb, saved_model, coreml = (suffix == x for x in suffixes)  # backend booleans
         jit = pt and 'torchscript' in w.lower()
         stride, names = 64, [f'class{i}' for i in range(1000)]  # assign defaults
+        fp16 &= pt or jit or onnx  # FP16
 
         if jit:  # TorchScript
             LOGGER.info(f'Loading {w} for TorchScript inference...')
@@ -1722,9 +1853,12 @@ class DetectMultiBackend(nn.Module):
                 stride, names = int(d['stride']), d['names']
         elif pt:  # PyTorch
             from models.experimental import attempt_load  # scoped to avoid circular import
-            model = torch.jit.load(w) if 'torchscript' in w else attempt_load(weights, map_location=device, fuse=fuse)
+            model = torch.jit.load(w) if 'torchscript' in w else attempt_load(
+                weights if isinstance(weights, list) else w, map_location=device, fuse=fuse)
             stride = int(model.stride.max())  # model stride
             names = model.module.names if hasattr(model, 'module') else model.names  # get class names
+            model.half() if fp16 else model.float()
+            self.model = model  # explicitly assign for to(), cpu(), cuda(), half()
         elif coreml:  # CoreML *.mlmodel
             import coremltools as ct
             model = ct.models.MLModel(w)
@@ -1771,6 +1905,8 @@ class DetectMultiBackend(nn.Module):
     def forward(self, im, augment=False, visualize=False, val=False):
         # YOLOv5 MultiBackend inference
         b, ch, h, w = im.shape  # batch, channel, height, width
+        if self.fp16 and im.dtype != torch.float16:
+            im = im.half()  # to FP16
         if self.pt:  # PyTorch
             y = self.model(im) if self.jit else self.model(im, augment=augment, visualize=visualize)
             return y if val else y[0]
@@ -3653,14 +3789,14 @@ class DepthWiseConv(nn.Module):
         # groups是一个数，当groups=in_channel时,表示做逐通道卷积
 
         # 逐点卷积
-        # self.point_conv = Snn_Conv2d(in_channels=in_channel,
-        #                              out_channels=out_channel,
-        #                              kernel_size=1,
-        #                              stride=1,
-        #                              padding=0,
-        #                              groups=1,
-        #                              bias=bias)
-        self.point_conv = GSConv(in_channel, out_channel, k=1, s=1, g=1)
+        self.point_conv = Snn_Conv2d(in_channels=in_channel,
+                                     out_channels=out_channel,
+                                     kernel_size=1,
+                                     stride=1,
+                                     padding=0,
+                                     groups=1,
+                                     bias=bias)
+        # self.point_conv = GSConv(in_channel, out_channel, k=1, s=1, g=1)
 
     def forward(self, input):
         out = self.depth_conv(input)
@@ -3747,9 +3883,9 @@ class GroupBatchnorm2d(nn.Module):
 
     def forward(self, x):
         T, N, C, H, W = x.size()  # 获取输入张量的尺寸
-        x = x.reshape(T * N, self.group_num, -1)  # 将输入张量重新排列为指定的形状
-        mean = x.mean(dim=2, keepdim=True)  # 计算每个组的均值
-        std = x.std(dim=2, keepdim=True)  # 计算每个组的标准差
+        x = x.reshape(T, N, self.group_num, -1)  # 将输入张量重新排列为指定的形状
+        mean = x.mean(dim=3, keepdim=True)  # 计算每个组的均值
+        std = x.std(dim=3, keepdim=True)  # 计算每个组的标准差
         x = (x - mean) / (std + self.eps)  # 应用批量归一化
         x = x.reshape(T, N, C, H, W)  # 恢复原始形状
         return x * self.gamma + self.beta  # 返回归一化后的张量
@@ -3766,7 +3902,7 @@ class SRU(nn.Module):
         super().__init__()  # 调用父类构造函数
 
         # 初始化 GroupNorm 层或自定义 GroupBatchnorm2d 层
-        self.gn = nn.GroupNorm(num_channels=oup_channels, num_groups=group_num) if torch_gn else GroupBatchnorm2d(
+        self.gn = GN(channels=oup_channels, num_groups=group_num) if torch_gn else GroupBatchnorm2d(
             c_num=oup_channels, group_num=group_num)
         self.gate_treshold = gate_treshold  # 设置门控阈值
         self.sigmoid = nn.Sigmoid()  # 创建 sigmoid 激活函数
@@ -4073,12 +4209,12 @@ class DualConv(nn.Module):
         """
         super(DualConv, self).__init__()
         # Group Convolution
-        # self.gc = Snn_Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, groups=g, bias=False)
-        self.gc = GSConv(in_channels, out_channels, k=3, s=stride)
+        self.gc = Snn_Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, groups=g, bias=False)
+        # self.gc = GSConv(in_channels, out_channels, k=3, s=stride)
         # self.gc = HetConv(in_channels, out_channels, s=stride, p=3)
         # Pointwise Convolution
-        # self.pwc = Snn_Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False)
-        self.pwc = GSConv(in_channels, out_channels, k=1, s=stride)
+        self.pwc = Snn_Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False)
+        # self.pwc = GSConv(in_channels, out_channels, k=1, s=stride)
 
     def forward(self, input_data):
         """
@@ -4161,115 +4297,39 @@ class StarBlock(nn.Module):
         return x
 
 
-class StarBlock_2(nn.Module):
-    def __init__(self, in_channels, out_channels, k_size=3, stride=1, mlp_ratio=3, drop_path=0., add=True):
+class StarBlock_1(nn.Module):
+    def __init__(self, in_channels, out_channels, k_size=3, stride=1, drop_path=0., add=True):
         super().__init__()
-        self.dw = nn.Sequential(
-            mem_update(act=False),
-            DepthWiseConv(in_channels, in_channels, kernel_size=k_size, stride=stride, padding=(k_size - 1) // 2),
-            batch_norm_2d(in_channels))
-        self.f1 = Conv_3(in_channels, mlp_ratio * in_channels, 1, 1)
-        self.f2 = Conv_3(in_channels, mlp_ratio * in_channels, 1, 1)
-        # self.g = Conv_3(mlp_ratio * in_channels, out_channels, 1, 1)
-        self.g = Conv_3(mlp_ratio * in_channels, out_channels, k=k_size, s=1)
-        # self.dw2 = nn.Sequential(
-        #     mem_update(act=False),
-        #     DepthWiseConv(out_channels, out_channels, kernel_size=k_size, stride=1, padding=(k_size - 1) // 2),
-        #     batch_norm_2d1(out_channels))
-        self.act = nn.ReLU6()
-        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
-        self.shortcut = nn.Sequential(
-        )
-        if stride != 1 or in_channels != out_channels:
-            self.shortcut = nn.Sequential(
-                nn.MaxPool3d((1, stride, stride), stride=(1, stride, stride)),
-                mem_update(act=False),
-                # EcsLifNode(v_threshold=thresh, step_mode='m'),
-                Snn_Conv2d(in_channels, out_channels, kernel_size=1, stride=1, bias=False),
-                batch_norm_2d(out_channels),
-            )
-
-    def forward(self, x):
-        input = x
-        x = self.dw(x)
-        x1, x2 = self.f1(x), self.f2(x)
-        x = self.act(x1) * x2
-        x = self.g(x)
-        # x = self.dw2(x)
-        x = self.shortcut(input) + self.drop_path(x)
-        return x
-
-
-class StarBlock_3(nn.Module):
-    def __init__(self, in_channels, out_channels, k_size=3, stride=1, mlp_ratio=3, drop_path=0., add=True):
-        super().__init__()
-        # self.dw = nn.Sequential(
-        #     mem_update(act=False),
-        #     DepthWiseConv(in_channels, in_channels, kernel_size=k_size, stride=stride, padding=1),
-        #     PartialConv(in_channels),
-        #     batch_norm_2d(in_channels))
-        self.dw = GSConv(in_channels, in_channels, k=k_size, s=stride)
-        self.f1 = Conv_1(in_channels, mlp_ratio * in_channels, 1, 1)
-        self.f2 = Conv_1(in_channels, mlp_ratio * in_channels, 1, 1)
-        # self.g = nn.Sequential(
-        #     mem_update(act=False),
-        #     DepthWiseConv(in_channels * mlp_ratio, out_channels, kernel_size=k_size, stride=1, padding=1),
-        #     PartialConv(out_channels),
-        #     batch_norm_2d(out_channels))
-        self.g = GSConv(in_channels * mlp_ratio, out_channels, k=k_size, s=1)
-        self.act = nn.ReLU6()
-        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
-        self.shortcut = nn.Sequential(
-        )
-        if stride != 1 or in_channels != out_channels:
-            self.shortcut = nn.Sequential(
-                nn.MaxPool3d((1, stride, stride), stride=(1, stride, stride)),
-                mem_update(act=False),
-                # EcsLifNode(v_threshold=thresh, step_mode='m'),
-                Snn_Conv2d(in_channels, out_channels, kernel_size=1, stride=1, bias=False),
-                batch_norm_2d(out_channels),
-            )
-
-    def forward(self, x):
-        input = x
-        # print(x.shape)
-        x = self.dw(x)
-        # print(x.shape)
-        x1, x2 = self.f1(x), self.f2(x)
-        # print(x1.shape)
-        # print(x2.shape)
-        x = self.act(x1) * x2
-        # print(x.shape)
-        x = self.g(x)
-        # print(x.shape)
-        # print(self.shortcut(input).shape)
-        # print(self.drop_path(x).shape)
-        x = self.shortcut(input) + self.drop_path(x)
-        return x
-
-
-class StarBlock_4(nn.Module):
-    def __init__(self, in_channels, out_channels, k_size=3, stride=1, mlp_ratio=3, drop_path=0., add=True):
-        super().__init__()
+        c_ = 1024
         if k_size == 3:
             pad = 1
         if k_size == 1:
             pad = 0
+        # self.dw = nn.Sequential(
+        #     mem_update(act=False),
+        #     # RFAConv(in_channels, out_channels, k_size, stride),
+        #     Snn_Conv2d(in_channels, out_channels, kernel_size=1, stride=1, padding=0, bias=False),
+        #     # DualConv(in_channels, out_channels, stride=stride, g=8),
+        #     batch_norm_2d(out_channels),
+        # )
         self.f1 = nn.Sequential(
             mem_update(act=False),
-            Snn_Conv2d(in_channels, out_channels, kernel_size=k_size, stride=stride, padding=pad, bias=False),
-            batch_norm_2d(out_channels),
+            # ScConv(in_channels),
+            # mem_update(act=False),
+            # DepthWiseConv(in_channels, mlp_ratio * out_channels, kernel_size=k_size, stride=stride, padding=pad),
+            Snn_Conv2d(in_channels, c_, kernel_size=k_size, stride=stride, padding=pad, bias=False, groups=2),
+            # Snn_Conv2d(out_channels, out_channels, kernel_size=1, stride=1, padding=0, bias=False),
+            batch_norm_2d(c_),
         )
-        #self.f1 = GSConv(in_channels, in_channels * mlp_ratio, k=k_size, s=stride)
-        #self.f1 = HetConv(in_channels, out_channels, s=stride, p=4)
-        #self.f1 = DualConv(in_channels, out_channels, stride=stride, g=1)
         self.f2 = nn.Sequential(
+            # mem_update(act=False),
+            # ScConv(in_channels),
             mem_update(act=False),
-            Snn_Conv2d(in_channels, out_channels, kernel_size=k_size, stride=stride, padding=pad, bias=False),
-            batch_norm_2d(out_channels),
+            # DepthWiseConv(in_channels, mlp_ratio * out_channels, kernel_size=k_size, stride=stride, padding=pad),
+            Snn_Conv2d(in_channels, c_, kernel_size=k_size, stride=stride, padding=pad, bias=False, groups=2),
+            # Snn_Conv2d(out_channels, out_channels, kernel_size=1, stride=1, padding=0, bias=False),
+            batch_norm_2d1(c_),
         )
-        #self.f2 = HetConv(in_channels, out_channels, s=stride, p=4)
-        #self.f2 = DualConv(in_channels, out_channels, stride=stride, g=1)
         # self.f1 = Conv_1(in_channels, in_channels, 1, 1)
         # self.f1 = nn.Sequential(
         #     GSConv(in_channels, in_channels, 1, 1),
@@ -4282,9 +4342,11 @@ class StarBlock_4(nn.Module):
         # )
         self.dw2 = nn.Sequential(
             mem_update(act=False),
-            # DepthWiseConv(out_channels, out_channels, kernel_size=7, stride=1, padding=(7 - 1) // 2),
-            Snn_Conv2d(out_channels, out_channels, kernel_size=k_size, stride=1, padding=(k_size - 1) // 2),
-            batch_norm_2d(out_channels))
+            # RFAConv(out_channels, out_channels, k_size, 1),
+            Snn_Conv2d(c_, out_channels, kernel_size=k_size, padding=pad, bias=False),
+            # CRU(out_channels),
+            # DualConv(out_channels, out_channels, stride=1, g=8),
+            batch_norm_2d1(out_channels), )
         # self.dw2 = GSConv(out_channels, out_channels, k=k_size, s=1)
         # self.g = Conv_3(mlp_ratio * in_channels, out_channels, k=k_size, s=1)
         self.act = nn.ReLU6()
@@ -4302,8 +4364,262 @@ class StarBlock_4(nn.Module):
 
     def forward(self, x):
         input = x
+        # x = self.dw(x)
         x1, x2 = self.f1(x), self.f2(x)
         x = self.act(x1) * x2
+        x = self.dw2(x)
+        x = self.shortcut(input) + self.drop_path(x)
+        return x
+
+
+class StarBlock_1s(nn.Module):
+    def __init__(self, in_channels, out_channels, k_size=3, stride=1, mlp_ratio=3, drop_path=0., add=True):
+        super().__init__()
+        if k_size == 3:
+            pad = 1
+        if k_size == 1:
+            pad = 0
+        self.dw = nn.Sequential(
+            mem_update(act=False),
+            Snn_Conv2d(in_channels, out_channels * mlp_ratio, kernel_size=1, stride=1, bias=False),
+            batch_norm_2d(out_channels * mlp_ratio))
+        self.f1 = nn.Sequential(
+            mem_update(act=False),
+            # ScConv(in_channels),
+            # mem_update(act=False),
+            # DepthWiseConv(in_channels, mlp_ratio * out_channels, kernel_size=k_size, stride=stride, padding=pad),
+            Snn_Conv2d(out_channels * mlp_ratio, out_channels * mlp_ratio, kernel_size=k_size, stride=stride,
+                       padding=pad, bias=False,
+                       groups=out_channels * mlp_ratio),
+            batch_norm_2d(out_channels * mlp_ratio),
+        )
+        self.f2 = nn.Sequential(
+            # mem_update(act=False),
+            # ScConv(in_channels),
+            mem_update(act=False),
+            # DepthWiseConv(in_channels, mlp_ratio * out_channels, kernel_size=k_size, stride=stride, padding=pad),
+            Snn_Conv2d(out_channels * mlp_ratio, out_channels * mlp_ratio, kernel_size=k_size, stride=stride,
+                       padding=pad, bias=False,
+                       groups=out_channels * mlp_ratio),
+            batch_norm_2d1(out_channels * mlp_ratio),
+        )
+        # self.g = Conv_4(mlp_ratio * out_channels, out_channels, k=1, s=1)
+        self.dw2 = nn.Sequential(
+            mem_update(act=False),
+            # DepthWiseConv(out_channels, out_channels, kernel_size=k_size, stride=1, padding=(k_size - 1) // 2),
+            Snn_Conv2d(out_channels * mlp_ratio, out_channels, kernel_size=1, stride=1),
+            Snn_Conv2d(out_channels, out_channels, kernel_size=k_size, stride=1, padding=pad, bias=False,
+                       groups=out_channels),
+            batch_norm_2d(out_channels))
+        self.act = nn.ReLU6()
+        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+        self.shortcut = nn.Sequential(
+        )
+        if stride != 1 or in_channels != out_channels:
+            self.shortcut = nn.Sequential(
+                nn.MaxPool3d((1, stride, stride), stride=(1, stride, stride)),
+                mem_update(act=False),
+                # EcsLifNode(v_threshold=thresh, step_mode='m'),
+                Snn_Conv2d(in_channels, out_channels, kernel_size=1, stride=1, bias=False),
+                batch_norm_2d(out_channels),
+            )
+
+    def forward(self, x):
+        input = x
+        x = self.dw(x)
+        x1, x2 = self.f1(x), self.f2(x)
+        x = self.act(x1) * x2
+        x = self.dw2(x)
+        x = self.shortcut(input) + self.drop_path(x)
+        return x
+
+
+class StarBlock_2(nn.Module):
+    def __init__(self, in_channels, out_channels, k_size=3, stride=1, mlp_ratio=3, drop_path=0., add=True):
+        super().__init__()
+        self.dw = nn.Sequential(
+            mem_update(act=False),
+            DepthWiseConv(in_channels, in_channels, kernel_size=k_size, stride=stride, padding=(k_size - 1) // 2),
+            # Snn_Conv2d(in_channels, in_channels, kernel_size=k_size, stride=stride, padding=(k_size - 1) // 2,
+            #            groups=in_channels),
+            batch_norm_2d(in_channels))
+        # self.dw = Conv_3(in_channels, out_channels, k=1, s=1, g=1)
+        self.f1 = Conv_3(in_channels, mlp_ratio * in_channels, 1, 1)
+        # self.f1 = Snn_Conv2d(out_channels, out_channels, kernel_size=k_size, stride=stride, padding=1)
+        self.f2 = Conv_3(in_channels, mlp_ratio * in_channels, 1, 1)
+        # self.f2 = Snn_Conv2d(out_channels, out_channels, kernel_size=k_size, stride=stride, padding=1)
+        # self.g = Conv_3(out_channels, out_channels, 1, 1)
+        self.g = Conv_4(mlp_ratio * in_channels, out_channels, k=1, s=1)
+        self.dw2 = nn.Sequential(
+            mem_update(act=False),
+            DepthWiseConv(out_channels, out_channels, kernel_size=k_size, stride=1,
+                          padding=(k_size - 1) // 2),
+            batch_norm_2d1(out_channels))
+        # self.dw2 = GSConv(out_channels, out_channels, k=k_size, s=1)
+        # self.dw2 = Conv_4(out_channels, out_channels, k=1, s=1, g=1)
+        self.act1 = nn.ReLU6()
+        # self.act2 = nn.Mish()
+        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+        self.shortcut = nn.Sequential(
+        )
+        if stride != 1 or in_channels != out_channels:
+            self.shortcut = nn.Sequential(
+                nn.MaxPool3d((1, stride, stride), stride=(1, stride, stride)),
+                mem_update(act=False),
+                # EcsLifNode(v_threshold=thresh, step_mode='m'),
+                Snn_Conv2d(in_channels, out_channels, kernel_size=1, stride=1, bias=False),
+                batch_norm_2d(out_channels),
+            )
+
+    def forward(self, x):
+        input = x
+        # print(x.shape)
+        x = self.dw(x)
+        # print(x.shape)
+        x1, x2 = self.f1(x), self.f2(x)
+        x_1 = self.act1(x1) * x2
+        # x_2 = self.act2(x2) * x1
+        x = x_1
+        # print(x.shape)
+        x = self.g(x)
+        # x = self.act2(x)
+        # print(x.shape)
+        x = self.dw2(x)
+        # print(x.shape)
+        x = self.shortcut(input) + self.drop_path(x)
+        return x
+
+
+class StarBlock_3(nn.Module):
+    def __init__(self, in_channels, out_channels, k_size=3, stride=1, mlp_ratio=3, drop_path=0., add=True):
+        super().__init__()
+        self.dw = nn.Sequential(
+            mem_update(act=False),
+            # DepthWiseConv(in_channels, in_channels, kernel_size=k_size, stride=stride, padding=(k_size - 1) // 2),
+            Snn_Conv2d(in_channels, in_channels, kernel_size=k_size, stride=stride, padding=(k_size - 1) // 2,
+                       groups=in_channels),
+            batch_norm_2d(in_channels))
+        # self.dw = Conv_3(in_channels, out_channels, k=1, s=1, g=1)
+        self.f1 = Conv_3(in_channels, mlp_ratio * in_channels, 1, 1)
+        # self.f1 = Snn_Conv2d(out_channels, out_channels, kernel_size=k_size, stride=stride, padding=1)
+        self.f2 = Conv_3(in_channels, mlp_ratio * in_channels, 1, 1)
+        # self.f2 = Snn_Conv2d(out_channels, out_channels, kernel_size=k_size, stride=stride, padding=1)
+        # self.g = Conv_3(out_channels, out_channels, 1, 1)
+        self.g = Conv_4(mlp_ratio * in_channels, out_channels, k=1, s=1)
+        self.dw2 = nn.Sequential(
+            mem_update(act=False),
+            DepthWiseConv(out_channels, out_channels, kernel_size=k_size, stride=1,
+                          padding=(k_size - 1) // 2),
+            batch_norm_2d1(out_channels))
+        # self.dw2 = GSConv(out_channels, out_channels, k=k_size, s=1)
+        # self.dw2 = Conv_4(out_channels, out_channels, k=1, s=1, g=1)
+        self.act = nn.ReLU6()
+        # self.act2 = nn.Mish()
+        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+        self.shortcut = nn.Sequential(
+        )
+        if in_channels < out_channels:
+            self.shortcut = nn.Sequential(
+                mem_update(act=False),
+                Snn_Conv2d(in_channels, out_channels - in_channels, kernel_size=1, stride=1, bias=False),
+                batch_norm_2d(out_channels - in_channels),
+            )
+        self.pools = nn.MaxPool3d((1, stride, stride), stride=(1, stride, stride))
+
+    def forward(self, x):
+        input = x
+        # print(x.shape)
+        x = self.dw(x)
+        # print(x.shape)
+        x1, x2 = self.f1(x), self.f2(x)
+        # print(x1.shape)
+        # print(x2.shape)
+        x = self.act(x1) * x2
+        # print(x.shape)
+        x = self.g(x)
+        x = self.dw2(x)
+        # print(x.shape)
+        # print(self.shortcut(input).shape)
+        # print(self.drop_path(x).shape)
+        temp = self.shortcut(input)
+        out = torch.cat((temp, input), dim=2)
+        out = self.pools(out)
+        x = out + self.drop_path(x)
+        return x
+
+
+class StarBlock_4(nn.Module):
+    def __init__(self, in_channels, out_channels, k_size=3, stride=1, mlp_ratio=3, drop_path=0., add=True):
+        super().__init__()
+        if k_size == 3:
+            pad = 1
+        if k_size == 1:
+            pad = 0
+        # self.dw = nn.Sequential(
+        #     mem_update(act=False),
+        #     # RFAConv(in_channels, out_channels, k_size, stride),
+        #     Snn_Conv2d(in_channels, out_channels, kernel_size=1, stride=1, padding=0, bias=False),
+        #     # DualConv(in_channels, out_channels, stride=stride, g=8),
+        #     batch_norm_2d(out_channels),
+        # )
+        self.f1 = nn.Sequential(
+            mem_update(act=False),
+            # ScConv(in_channels),
+            # mem_update(act=False),
+            # DepthWiseConv(in_channels, mlp_ratio * out_channels, kernel_size=k_size, stride=stride, padding=pad),
+            Snn_Conv2d(in_channels, out_channels, kernel_size=k_size, stride=stride, padding=pad, bias=False, groups=1),
+            # Snn_Conv2d(out_channels, out_channels, kernel_size=1, stride=1, padding=0, bias=False),
+            batch_norm_2d(out_channels),
+        )
+        self.f2 = nn.Sequential(
+            # mem_update(act=False),
+            # ScConv(in_channels),
+            mem_update(act=False),
+            # DepthWiseConv(in_channels, mlp_ratio * out_channels, kernel_size=k_size, stride=stride, padding=pad),
+            Snn_Conv2d(in_channels, out_channels, kernel_size=k_size, stride=stride, padding=pad, bias=False, groups=1),
+            # Snn_Conv2d(out_channels, out_channels, kernel_size=1, stride=1, padding=0, bias=False),
+            batch_norm_2d1(out_channels),
+        )
+        # self.f1 = Conv_1(in_channels, in_channels, 1, 1)
+        # self.f1 = nn.Sequential(
+        #     GSConv(in_channels, in_channels, 1, 1),
+        #     batch_norm_2d(in_channels)
+        # )
+        # self.f2 = Conv_1(in_channels, in_channels, 1, 1)
+        # self.f2 = nn.Sequential(
+        #     GSConv(in_channels, in_channels, 1, 1),
+        #     batch_norm_2d(in_channels)
+        # )
+        self.dw2 = nn.Sequential(
+            mem_update(act=False),
+            # RFAConv(out_channels, out_channels, k_size, 1),
+            Snn_Conv2d(out_channels, out_channels, kernel_size=k_size, padding=pad, bias=False),
+            # CRU(out_channels),
+            # DualConv(out_channels, out_channels, stride=1, g=8),
+            batch_norm_2d1(out_channels), )
+        # self.dw2 = GSConv(out_channels, out_channels, k=k_size, s=1)
+        # self.g = Conv_3(mlp_ratio * in_channels, out_channels, k=k_size, s=1)
+        # self.act = nn.ReLU6()
+        self.act = ClippedTPReLU(num_parameters=out_channels)
+        # self.act = nn.GELU()
+        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+        self.shortcut = nn.Sequential(
+        )
+        if stride != 1 or in_channels != out_channels:
+            self.shortcut = nn.Sequential(
+                nn.MaxPool3d((1, stride, stride), stride=(1, stride, stride)),
+                mem_update(act=False),
+                # EcsLifNode(v_threshold=thresh, step_mode='m'),
+                Snn_Conv2d(in_channels, out_channels, kernel_size=1, stride=1, bias=False),
+                batch_norm_2d(out_channels),
+            )
+
+    def forward(self, x):
+        input = x
+        # x = self.dw(x)
+        x1, x2 = self.f1(x), self.f2(x)
+        x = self.act(x1) * x2
+        # x = x1 * x2
         x = self.dw2(x)
         x = self.shortcut(input) + self.drop_path(x)
         return x
@@ -4360,8 +4676,8 @@ class StarBlock_5(nn.Module):
             batch_norm_2d1(out_channels), )
         # self.dw2 = GSConv(out_channels, out_channels, k=k_size, s=1)
         # self.g = Conv_3(mlp_ratio * in_channels, out_channels, k=k_size, s=1)
-        self.act = nn.ReLU6()
-        # self.act = ClippedTPReLU(num_parameters=out_channels)
+        # self.act = nn.ReLU6()
+        self.act = ClippedTPReLU(num_parameters=out_channels)
         # self.act = nn.GELU()
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.shortcut = nn.Sequential(
@@ -4388,6 +4704,71 @@ class StarBlock_5(nn.Module):
         return x
 
 
+class StarSConv(nn.Module):
+    def __init__(self, in_channels, out_channels, k_size=3, stride=1, expansion_ratio=2, drop_path=0., add=True):
+        super().__init__()
+        if k_size == 3:
+            pad = 1
+        if k_size == 1:
+            pad = 0
+        self.dw = nn.Sequential(
+            mem_update(act=False),
+            Snn_Conv2d(in_channels, out_channels * expansion_ratio, kernel_size=1, stride=1, bias=False),
+            batch_norm_2d(out_channels * expansion_ratio))
+        self.f1 = nn.Sequential(
+            mem_update(act=False),
+            # ScConv(in_channels),
+            # mem_update(act=False),
+            # DepthWiseConv(in_channels, mlp_ratio * out_channels, kernel_size=k_size, stride=stride, padding=pad),
+            Snn_Conv2d(out_channels * expansion_ratio, out_channels * expansion_ratio, kernel_size=k_size,
+                       stride=stride,
+                       padding=pad, bias=False,
+                       groups=out_channels * expansion_ratio),
+            batch_norm_2d(out_channels * expansion_ratio),
+        )
+        self.f2 = nn.Sequential(
+            # mem_update(act=False),
+            # ScConv(in_channels),
+            mem_update(act=False),
+            # DepthWiseConv(in_channels, mlp_ratio * out_channels, kernel_size=k_size, stride=stride, padding=pad),
+            Snn_Conv2d(out_channels * expansion_ratio, out_channels * expansion_ratio, kernel_size=k_size,
+                       stride=stride,
+                       padding=pad, bias=False,
+                       groups=out_channels * expansion_ratio),
+            batch_norm_2d1(out_channels * expansion_ratio),
+        )
+        # self.g = Conv_4(mlp_ratio * out_channels, out_channels, k=1, s=1)
+        self.dw2 = nn.Sequential(
+            mem_update(act=False),
+            # DepthWiseConv(out_channels, out_channels, kernel_size=k_size, stride=1, padding=(k_size - 1) // 2),
+            Snn_Conv2d(out_channels * expansion_ratio, out_channels, kernel_size=1, stride=1),
+            Snn_Conv2d(out_channels, out_channels, kernel_size=k_size, stride=1, padding=pad, bias=False,
+                       groups=out_channels),
+            batch_norm_2d(out_channels))
+        self.act = nn.ReLU6()
+        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+        self.shortcut = nn.Sequential(
+        )
+        if stride != 1 or in_channels != out_channels:
+            self.shortcut = nn.Sequential(
+                nn.MaxPool3d((1, stride, stride), stride=(1, stride, stride)),
+                mem_update(act=False),
+                # EcsLifNode(v_threshold=thresh, step_mode='m'),
+                Snn_Conv2d(in_channels, out_channels, kernel_size=1, stride=1, bias=False),
+                batch_norm_2d(out_channels),
+            )
+
+    def forward(self, x):
+        input = x
+        x = self.dw(x)
+        x1, x2 = self.f1(x), self.f2(x)
+        x = self.act(x1) * x2
+        # x = self.g(x)
+        x = self.dw2(x)
+        x = self.shortcut(input) + self.drop_path(x)
+        return x
+
+
 class DropPath(nn.Module):
     def __init__(self, drop_prob=None):
         super(DropPath, self).__init__()
@@ -4404,7 +4785,7 @@ class DropPath(nn.Module):
         return output
 
 
-class StarNet(nn.Module):
+class MStarBlock(nn.Module):
     def __init__(self, in_channels, out_channels, k_size=3, stride=1, mlp_ratio=3, e=2):
         super().__init__()
         c_ = int(in_channels * e)
@@ -4413,33 +4794,48 @@ class StarNet(nn.Module):
             pad = 1
         if k_size == 1:
             pad = 0
-        # self.act1 = neuron.IFNode(surrogate_function=surrogate.ATan())
-        # self.act1 = mem_update(act=False)
-        # self.conv1 = nn.Sequential(
-        #     mem_update(act=False),
-        #     Snn_Conv2d(in_channels, out_channels, kernel_size=k_size, stride=stride, padding=pad, bias=False),
-        #     batch_norm_2d(out_channels),
-        # )
-        self.conv1 = nn.Sequential(
-            # mem_update(False),
-            StarBlock_4(in_channels, in_channels, k_size=k_size, stride=stride, mlp_ratio=mlp_ratio))
-        # self.bn1 = layer.BatchNorm2d(out_channels)
-        # self.bn1 = batch_norm_2d(out_channels)
-        # self.act2 = mem_update(act=False)
-        # self.conv2 = layer.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False)
-        self.conv2 = GSConv(in_channels, out_channels, k=k_size)
-        # self.conv2 = nn.Sequential(
-        #     # mem_update(False),
-        #     StarBlock_2(out_channels, out_channels, k_size=k_size, stride=1, mlp_ratio=mlp_ratio))
-        # self.conv2 = nn.Sequential(
-        #     mem_update(act=False),
-        #     Snn_Conv2d(out_channels, out_channels, kernel_size=1, stride=1, bias=False),
-        #     batch_norm_2d1(out_channels),
-        # )
-        # self.bn2 = layer.BatchNorm2d(out_channels)
-        # self.bn2 = batch_norm_2d1(out_channels)
 
-        self.shortcut = nn.Sequential(
+        self.conv = StarSConv(in_channels, in_channels, k_size, stride)
+        self.conv2 = Conv_3(in_channels, in_channels * mlp_ratio, k_size, s=1)
+        self.conv3 = Conv_4(in_channels * mlp_ratio, out_channels, k_size, s=1)
+
+        if stride != 1 or in_channels != out_channels:
+            self.shortcut = shortcut(in_channels, out_channels, stride)
+
+        # functional.set_step_mode(self, step_mode='m')
+
+    def forward(self, x):
+        x1 = self.shortcut(x)
+        x = self.conv(x)
+        x = self.conv2(x)
+        x = self.conv3(x)
+        return x + x1
+
+
+class MStarBlock_2(nn.Module):
+    def __init__(self, in_channels, out_channels, k_size=3, stride=1, mlp_ratio=3, e=2):
+        super().__init__()
+        c_ = int(in_channels * e)
+        p = None
+        if k_size == 3:
+            pad = 1
+        if k_size == 1:
+            pad = 0
+
+        self.conv = StarSConv(in_channels, in_channels, k_size, stride)
+        self.conv2 = nn.Sequential(
+            mem_update(act=False),
+            Snn_Conv2d(in_channels, in_channels * mlp_ratio, 1, 1),
+            Snn_Conv2d(in_channels * mlp_ratio, in_channels * mlp_ratio, 1, 1, groups=in_channels * mlp_ratio),
+            Snn_Conv2d(in_channels * mlp_ratio, in_channels, 1, 1),
+            batch_norm_2d(in_channels)
+        )
+        self.conv3 = nn.Sequential(
+            mem_update(act=False),
+            Snn_Conv2d(in_channels, in_channels * mlp_ratio, 1, 1),
+            Snn_Conv2d(in_channels * mlp_ratio, in_channels * mlp_ratio, 1, 1, groups=in_channels * mlp_ratio),
+            Snn_Conv2d(in_channels * mlp_ratio, out_channels, 1, 1),
+            batch_norm_2d(out_channels)
         )
 
         if stride != 1 or in_channels != out_channels:
@@ -4448,15 +4844,10 @@ class StarNet(nn.Module):
         # functional.set_step_mode(self, step_mode='m')
 
     def forward(self, x):
-        # print("你好")
-        # print(x.shape)
         x1 = self.shortcut(x)
-        # x = self.act1(x)
-        x = self.conv1(x)
-        # x = self.bn1(x)
-        # x = self.act2(x)
+        x = self.conv(x)
         x = self.conv2(x)
-        # x = self.bn2(x)
+        x = self.conv3(x)
         return x + x1
 
 
@@ -4539,6 +4930,7 @@ class HetConv(nn.Module):
             out.append(out_)
         return torch.cat(out, 2)
 
+
 class TPReLU(nn.PReLU):
     def __init__(self, num_parameters: int = 1, init: float = 0.25,
                  device=None, dtype=None) -> None:
@@ -4592,6 +4984,7 @@ class ASFF3(nn.Module):
         self.weight_level_0 = Conv_5(self.inter_dim, compress_c, 1, 1)
         self.weight_level_1 = Conv_5(self.inter_dim, compress_c, 1, 1)
         self.weight_level_2 = Conv_5(self.inter_dim, compress_c, 1, 1)
+        self.interpolate = CustomInterpolate()
 
         self.weight_levels = Snn_Conv2d(compress_c * 3, 3, kernel_size=1, stride=1, padding=0)
         self.vis = vis
@@ -4616,7 +5009,6 @@ class ASFF3(nn.Module):
             level_1_compressed = self.compress_level_1(x_level_1)
             level_1_resized = self.resized_level_1(level_1_compressed)
             level_2_resized = x_level_2
-
 
         level_0_weight_v = self.weight_level_0(level_0_resized)
         level_1_weight_v = self.weight_level_1(level_1_resized)
@@ -4652,7 +5044,7 @@ class CustomInterpolate(nn.Module):
 
         # 将张量恢复为原始形状 (T, B, C, H, W)
         x_interpolated = x_interpolated.reshape(x.size(0), x.size(1), x_interpolated.size(1), x_interpolated.size(2),
-                                             x_interpolated.size(3))
+                                                x_interpolated.size(3))
         return x_interpolated
 
 

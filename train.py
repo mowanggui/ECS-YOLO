@@ -1,17 +1,10 @@
-
 """
 Train a  model on a custom dataset
 
 Usage:
     $ python path/to/train.py --data coco128.yaml --weights yolov3.pt --img 640
 """
-#from spikingjelly.activation_based import functional, layer
-import sys
-sys.path.append('/home/algointern/project/EMS-YOLO-main')
-sys.path.append('/home/algointern/project/EMS-YOLO-main/utils')
-sys.path.append('/home/algointern/project/EMS-YOLO-main/models')
-sys.path.append('/home/algointern/project/EMS-YOLO-main/utils/loggers')
-sys.path.append('/home/algointern/project/EMS-YOLO-main/utils/loggers/wandb')
+# from spikingjelly.activation_based import functional, layer
 
 '''===============================================一、导入包==================================================='''
 '''======================1.导入安装好的python库====================='''
@@ -44,28 +37,28 @@ ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 '''===================3..加载自定义模块============================'''
 import val  # for end-of-epoch mAP
-from experimental import attempt_load
-from yolo import Model
-from autoanchor import check_anchors
-from autobatch import check_train_batch_size
-from callbacks import Callbacks
-from dataloader import create_dataloader
-from downloads import attempt_download
-from general import (LOGGER, NCOLS, check_dataset, check_file, check_git_status, check_img_size,
+from models.experimental import attempt_load
+from models.yolo import Model
+from utils.autoanchor import check_anchors
+from utils.autobatch import check_train_batch_size
+from utils.callbacks import Callbacks
+from utils.datasets import create_dataloader
+from utils.downloads import attempt_download
+from utils.general import (LOGGER, NCOLS, check_dataset, check_file, check_git_status, check_img_size,
                            check_requirements, check_suffix, check_yaml, colorstr, get_latest_run, increment_path,
                            init_seeds, intersect_dicts, labels_to_class_weights, labels_to_image_weights, methods,
                            one_cycle, print_args, print_mutation, strip_optimizer)
-from loggers import Loggers
-from wandb_utils import check_wandb_resume
-from loss import ComputeLoss
-from metrics import fitness
-from plots import plot_evolve, plot_labels
-from torch_utils import EarlyStopping, ModelEMA, de_parallel, select_device, torch_distributed_zero_first
+from utils.loggers import Loggers
+from utils.loggers.wandb.wandb_utils import check_wandb_resume
+from utils.loss import ComputeLoss
+from utils.metrics import fitness
+from utils.plots import plot_evolve, plot_labels
+from utils.torch_utils import EarlyStopping, ModelEMA, de_parallel, select_device, torch_distributed_zero_first
 
 LOCAL_RANK = int(os.getenv('LOCAL_RANK', -1))  # https://pytorch.org/docs/stable/elastic/run.html
 RANK = int(os.getenv('RANK', -1))
 WORLD_SIZE = int(os.getenv('WORLD_SIZE', 1))
-噪声强度 = 0.6
+噪声强度 = 0.0
 '''
 查找名为LOCAL_RANK，RANK，WORLD_SIZE的环境变量，
 若存在则返回环境变量的值，若不存在则返回第二个参数（-1，默认None）
@@ -75,15 +68,17 @@ rank和local_rank的区别： 两者的区别在于前者用于进程间通讯�
 '''===============================================二、train（）函数：训练过程==================================================='''
 
 ''' =====================1.载入参数和初始化配置信息==========================  '''
+
+
 def train(hyp,  # 超参数 可以是超参数配置文件的路径或超参数字典 path/to/hyp.yaml or hyp dictionary
           opt,  # main中opt参数
-          device, # 当前设备
-          callbacks # 用于存储Loggers日志记录器中的函数，方便在每个训练阶段控制日志的记录情况
+          device,  # 当前设备
+          callbacks  # 用于存储Loggers日志记录器中的函数，方便在每个训练阶段控制日志的记录情况
           ):
     # 用于存储Loggers日志记录器中的函数，方便在每个训练阶段控制日志的记录情况
-    save_dir, epochs, batch_size, weights, single_cls, evolve, data, cfg, resume, noval, nosave, workers, freeze, cupy,= \
+    save_dir, epochs, batch_size, weights, single_cls, evolve, data, cfg, resume, noval, nosave, workers, freeze, cupy, = \
         Path(opt.save_dir), opt.epochs, opt.batch_size, opt.weights, opt.single_cls, opt.evolve, opt.data, opt.cfg, \
-        opt.resume, opt.noval, opt.nosave, opt.workers, opt.freeze, opt.cupy
+            opt.resume, opt.noval, opt.nosave, opt.workers, opt.freeze, opt.cupy
 
     '''
     1.1创建目录，设置模型、txt等保存的路径
@@ -100,7 +95,7 @@ def train(hyp,  # 超参数 可以是超参数配置文件的路径或超参数�
     1.2 读取hyp(超参数)配置文件
     '''
     # Hyperparameters 加载超参数
-    if isinstance(hyp, str):# isinstance()是否是已知类型。 判断hyp是字典还是字符串
+    if isinstance(hyp, str):  # isinstance()是否是已知类型。 判断hyp是字典还是字符串
         # 若hyp是字符串，即认定为路径，则加载超参数为字典
         with open(hyp, errors='ignore') as f:
             # 加载yaml文件
@@ -126,14 +121,14 @@ def train(hyp,  # 超参数 可以是超参数配置文件的路径或超参数�
     1.4 加载相关日志功能:如tensorboard,logger,wandb
     '''
     # Loggers 设置wandb和tb两种日志, wandb和tensorboard都是模型信息，指标可视化工具
-    if RANK in [-1, 0]:        #这里执行
+    if RANK in [-1, 0]:  # 这里执行
         # 初始化日志记录器实例
         loggers = Loggers(save_dir, weights, opt, hyp, LOGGER)  # loggers instance
         # W&B # wandb为可视化参数工具
         if loggers.wandb:
-            data_dict = loggers.wandb.data_dict#这里赋值了数据集的参数
+            data_dict = loggers.wandb.data_dict  # 这里赋值了数据集的参数
             # 如果使用中断训练 再读取一次参数
-            if resume:#不执行
+            if resume:  # 不执行
                 weights, epochs, hyp = opt.weights, opt.epochs, opt.hyp
 
         # Register actions
@@ -151,8 +146,9 @@ def train(hyp,  # 超参数 可以是超参数配置文件的路径或超参数�
     # 设置随机种子
     init_seeds(1 + RANK)
     # 加载数据配置信息
-    with torch_distributed_zero_first(LOCAL_RANK): # torch_distributed_zero_first 同步所有进程
-        data_dict = data_dict or check_dataset(data)  # check if None  check_dataset 检查数据集，如果没找到数据集则下载数据集(仅适用于项目中自带的yaml文件数据集)
+    with torch_distributed_zero_first(LOCAL_RANK):  # torch_distributed_zero_first 同步所有进程
+        data_dict = data_dict or check_dataset(
+            data)  # check if None  check_dataset 检查数据集，如果没找到数据集则下载数据集(仅适用于项目中自带的yaml文件数据集)
     # 获取训练集、测试集图片路径
     train_path, val_path = data_dict['train'], data_dict['val']
     # nc：数据集有多少种类别
@@ -173,7 +169,7 @@ def train(hyp,  # 超参数 可以是超参数配置文件的路径或超参数�
     '''
     2.1预训练模型加载 
     '''
-    if pretrained:#false不执行这里
+    if pretrained:  # false不执行这里
         # 使用预训练的话：
         # torch_distributed_zero_first(RANK): 用于同步不同进程对数据读取的上下文管理器
         with torch_distributed_zero_first(LOCAL_RANK):
@@ -194,7 +190,8 @@ def train(hyp,  # 超参数 可以是超参数配置文件的路径或超参数�
         如果用户自定义了anchor，再加载预训练权重进行训练，会覆盖掉用户自定义的anchor。
         """
         # ***加载模型*** #
-        model = Model(cfg or ckpt['model'].yaml, ch=3, nc=nc, anchors=hyp.get('anchors'),use_cupy=cupy).to(device)  # create
+        model = Model(cfg or ckpt['model'].yaml, ch=3, nc=nc, anchors=hyp.get('anchors'), use_cupy=cupy).to(
+            device)  # create
         # ***以下三行是获得anchor*** #
         # 若cfg 或 hyp.get('anchors')不为空且不使用中断训练 exclude=['anchor'] 否则 exclude=[]
         exclude = ['anchor'] if (cfg or hyp.get('anchors')) and not resume else []  # exclude keys
@@ -210,7 +207,7 @@ def train(hyp,  # 超参数 可以是超参数配置文件的路径或超参数�
         LOGGER.info(f'Transferred {len(csd)}/{len(model.state_dict())} items from {weights}')  # report
     else:
         # 直接加载模型，ch为输入图片通道
-        model = Model(cfg, ch=3, nc=nc, anchors=hyp.get('anchors'),use_cupy=cupy).to(device)  # create
+        model = Model(cfg, ch=3, nc=nc, anchors=hyp.get('anchors'), use_cupy=cupy).to(device)  # create
 
     '''
     2.2设置模型输入
@@ -316,7 +313,7 @@ def train(hyp,  # 超参数 可以是超参数配置文件的路径或超参数�
     # Resume 断点续训
     # 断点续训其实就是把上次训练结束的模型作为预训练模型，并从中加载参数
     start_epoch, best_fitness = 0, 0.0
-    if pretrained:# 如果有预训练
+    if pretrained:  # 如果有预训练
         # Optimizer 加载优化器与best_fitness
         if ckpt['optimizer'] is not None:
             # 将预训练模型中的参数加载进优化器
@@ -359,7 +356,7 @@ def train(hyp,  # 超参数 可以是超参数配置文件的路径或超参数�
 
     # SyncBatchNorm  多卡归一化
     # SyncBatchNorm,opt.sync_bn=false
-    if opt.sync_bn and cuda and RANK != -1:# 多卡训练，把不同卡的数据做个同步
+    if opt.sync_bn and cuda and RANK != -1:  # 多卡训练，把不同卡的数据做个同步
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model).to(device)
         LOGGER.info('Using SyncBatchNorm()')
 
@@ -385,26 +382,26 @@ def train(hyp,  # 超参数 可以是超参数配置文件的路径或超参数�
     assert mlc < nc, f'Label class {mlc} exceeds nc={nc} in {data}. Possible class labels are 0-{nc - 1}'
 
     # Process 0 验证集数据集加载
-    if RANK in [-1, 0]:# 加载验证集数据加载器
-        val_loader = create_dataloader(val_path, imgsz, batch_size // WORLD_SIZE , gs, single_cls,
+    if RANK in [-1, 0]:  # 加载验证集数据加载器
+        val_loader = create_dataloader(val_path, imgsz, batch_size // WORLD_SIZE, gs, single_cls,
                                        hyp=hyp, cache=None if noval else opt.cache, rect=True, rank=-1,
                                        workers=workers, pad=0.5,
                                        prefix=colorstr('val: '))[0]
 
-        if not resume:# 没有使用resume
+        if not resume:  # 没有使用resume
             # 统计dataset的label信息
-            labels = np.concatenate(dataset.labels, 0)#每一张图有很多歌label，相当于格式全部整合了成849942,5
+            labels = np.concatenate(dataset.labels, 0)  # 每一张图有很多歌label，相当于格式全部整合了成849942,5
             # c = torch.tensor(labels[:, 0])  # classes
             # cf = torch.bincount(c.long(), minlength=nc) + 1.  # frequency
             # model._initialize_biases(cf.to(device))
-            if plots:#true plots画出标签信息
-                plot_labels(labels, names, save_dir)#平时训练可以关掉
+            if plots:  # true plots画出标签信息
+                plot_labels(labels, names, save_dir)  # 平时训练可以关掉
 
             '''
             3.2 计算anchor
             '''
             # Anchors 计算默认锚框anchor与数据集标签框的高宽比
-            if not opt.noautoanchor:#执行；
+            if not opt.noautoanchor:  # 执行；
                 check_anchors(dataset, model=model, thr=hyp['anchor_t'], imgsz=imgsz)
                 '''
                 参数dataset代表的是训练集，hyp['anchor_t']是从配置文件hpy.scratch.yaml读取的超参数，anchor_t:4.0
@@ -450,7 +447,7 @@ def train(hyp,  # 超参数 可以是超参数配置文件的路径或超参数�
     4.2 训练热身部分
     '''
     # Start training
-    t0 = time.time()# 获取当前时间
+    t0 = time.time()  # 获取当前时间
     # 获取热身训练的迭代次数
     nw = max(round(hyp['warmup_epochs'] * nb), 1000)  # number of warmup iterations, max(3 epochs, 1k iterations)
     # nw = min(nw, (epochs - start_epoch) / 2 * nb)  # limit warmup to < 1/2 of training
@@ -467,10 +464,10 @@ def train(hyp,  # 超参数 可以是超参数配置文件的路径或超参数�
     # 初始化损失函数
     compute_loss = ComputeLoss(model)  # init loss class
     # 打印日志输出信息
-    LOGGER.info(f'Image sizes {imgsz} train, {imgsz} val\n' # 打印训练和测试输入图片分辨率
-                f'Using {train_loader.num_workers * WORLD_SIZE} dataloader workers\n' # 加载图片时调用的cpu进程数
-                f"Logging results to {colorstr('bold', save_dir)}\n" # 日志目录
-                f'Starting training for {epochs} epochs...') # 从哪个epoch开始训练
+    LOGGER.info(f'Image sizes {imgsz} train, {imgsz} val\n'  # 打印训练和测试输入图片分辨率
+                f'Using {train_loader.num_workers * WORLD_SIZE} dataloader workers\n'  # 加载图片时调用的cpu进程数
+                f"Logging results to {colorstr('bold', save_dir)}\n"  # 日志目录
+                f'Starting training for {epochs} epochs...')  # 从哪个epoch开始训练
 
     '''
     4.3 开始训练
@@ -484,7 +481,7 @@ def train(hyp,  # 超参数 可以是超参数配置文件的路径或超参数�
         model.train()
 
         # Update image weights (optional, single-GPU only)  更新图片的权重
-        if opt.image_weights:# 获取图片采样的权重
+        if opt.image_weights:  # 获取图片采样的权重
             # 经过一轮训练，若哪一类的不精确度高，那么这个类就会被分配一个较高的权重，来增加它被采样的概率
             cw = model.class_weights.cpu().numpy() * (1 - maps) ** 2 / nc  # class weights
             # 将计算出的权重换算到图片的维度，将类别的权重换算为图片的权重
@@ -544,7 +541,7 @@ def train(hyp,  # 超参数 可以是超参数配置文件的路径或超参数�
 
             # Multi-scale 设置多尺度训练，从imgsz * 0.5, imgsz * 1.5 + gs随机选取尺寸
             # imgsz: 默认训练尺寸   gs: 模型最大stride=32   [32 16 8]
-            if opt.multi_scale:# 随机改变图片的尺寸
+            if opt.multi_scale:  # 随机改变图片的尺寸
                 sz = random.randrange(imgsz * 0.5, imgsz * 1.5 + gs) // gs * gs  # size
                 sf = sz / max(imgs.shape[2:])  # scale factor
                 if sf != 1:
@@ -627,16 +624,16 @@ def train(hyp,  # 超参数 可以是超参数配置文件的路径或超参数�
                                  [1] box_loss 验证集回归损失, obj_loss 验证集置信度损失, cls_loss 验证集分类损失
                         maps: [80] 所有类别的mAP@0.5:0.95
                 """
-                results, maps, _ = val.run(data_dict, # 数据集配置文件地址 包含数据集的路径、类别个数、类名、下载地址等信息
-                                           batch_size=batch_size // WORLD_SIZE , # 要保证batch_size能整除卡数
+                results, maps, _ = val.run(data_dict,  # 数据集配置文件地址 包含数据集的路径、类别个数、类名、下载地址等信息
+                                           batch_size=batch_size // WORLD_SIZE,  # 要保证batch_size能整除卡数
                                            imgsz=imgsz,
                                            model=ema.ema,
-                                           single_cls=single_cls, # 是否是单类数据集
+                                           single_cls=single_cls,  # 是否是单类数据集
                                            dataloader=val_loader,
-                                           save_dir=save_dir, # 保存地址 runs/train/expn
-                                           plots=False, # 是否可视化
+                                           save_dir=save_dir,  # 保存地址 runs/train/expn
+                                           plots=False,  # 是否可视化
                                            callbacks=callbacks,
-                                           compute_loss=compute_loss) # 损失函数(train)
+                                           compute_loss=compute_loss)  # 损失函数(train)
 
             # Update best mAP 更新best_fitness
             # fi: [P, R, mAP@.5, mAP@.5-.95]的一个加权值 = 0.1*mAP@.5 + 0.9*mAP@.5-.95
@@ -726,7 +723,7 @@ def train(hyp,  # 超参数 可以是超参数配置文件的路径或超参数�
                                             plots=True,
                                             callbacks=callbacks,
                                             compute_loss=compute_loss)  # val best model with plots
-                    if is_coco: # 如果是coco数据集
+                    if is_coco:  # 如果是coco数据集
                         callbacks.run('on_fit_epoch_end', list(mloss) + list(results) + lr, epoch, best_fitness, fi)
         # 记录训练终止时的日志
         callbacks.run('on_train_end', last, best, plots, epoch, results)
@@ -763,11 +760,13 @@ def train(hyp,  # 超参数 可以是超参数配置文件的路径或超参数�
     logdir:                            存放日志的目录
     workers:                           dataloader的最大worker数量
 """
+
+
 def parse_opt(known=False):
     parser = argparse.ArgumentParser()
     # 预训练权重文件                                                                                         
-    #parser.add_argument('--weights', type=str, default='', help='initial weights path')
-    parser.add_argument('--weights', type=str, default=ROOT / 'kittires10.pt', help='initial weights path')
+    parser.add_argument('--weights', type=str, default='kitti.pt', help='initial weights path')
+    # parser.add_argument('--weights', type=str, default=ROOT / 'runs/train/exp54/weights/best.pt', help='initial weights path')
     # 训练模型
     parser.add_argument('--cfg', type=str, default=ROOT / 'models/resnet10.yaml', help='model.yaml path')
     # parser.add_argument('--cfg', type=str, default='', help='model.yaml path')
@@ -778,7 +777,7 @@ def parse_opt(known=False):
     # parser.add_argument('--hyp', type=str, default=ROOT / '', help='hyperparameters path')
     # epochs: 训练轮次， 默认轮次为300次
     parser.add_argument('--epochs', type=int, default=300, help='total training epochs')
-    # batch-size: 训练批次， 默认bs=16
+    # batch-size: 训练批次， 默认bs=1```````
     parser.add_argument('--batch-size', type=int, default=8, help='total batch size for all GPUs, -1 for autobatch')
     # imagesize: 设置图片大小, 默认640*640
     parser.add_argument('--imgsz', '--img', '--img-size', type=int, default=640, help='train, val image size (pixels)')
@@ -786,7 +785,7 @@ def parse_opt(known=False):
     parser.add_argument('--rect', action='store_true', help='rectangular training')
     # resume: 是否接着上次的训练结果，继续训练
     # 矩形训练：将比例相近的图片放在一个batch（由于batch里面的图片shape是一样的）
-    parser.add_argument('--resume', nargs='?', const=True, default=False , help='resume most recent training')
+    parser.add_argument('--resume', nargs='?', const=True, default=True, help='resume most recent training')
     # nosave: 不保存模型  默认False(保存)  在./runs/exp*/train/weights/保存两个模型 一个是最后一次的模型 一个是最好的模型
     # best.pt/ last.pt 不建议运行代码添加 --nosave
     parser.add_argument('--nosave', action='store_true', help='only save final checkpoint')
@@ -846,7 +845,6 @@ def parse_opt(known=False):
     # 使用数据的版本
     parser.add_argument('--artifact_alias', type=str, default='latest', help='W&B: Version of dataset artifact to use')
 
-
     parser.add_argument('--cupy', default=True, action='store_true', help='use cupy backend')
     parser.add_argument('--noplots', action='store_true', help='save no plot files')
 
@@ -854,13 +852,16 @@ def parse_opt(known=False):
     opt = parser.parse_known_args()[0] if known else parser.parse_args()
     return opt
 
+
 '''===============================================四、main（）函数==================================================='''
+
+
 def main(opt, callbacks=Callbacks()):
     '''
     4.1  检查分布式训练环境
     '''
     # Checks
-    if RANK in [-1, 0]: # 若进程编号为-1或0
+    if RANK in [-1, 0]:  # 若进程编号为-1或0
         # 输出所有训练参数 / 参数以彩色的方式表现
         print_args(FILE.stem, opt)
         # 检测YOLO的github仓库是否更新，若已更新，给出提示
@@ -929,7 +930,7 @@ def main(opt, callbacks=Callbacks()):
     4.4  判断是否进化训练
     '''
     # Train 训练模式: 如果不进行超参数进化，则直接调用train()函数，开始训练
-    if not opt.evolve:# 如果不使用超参数进化
+    if not opt.evolve:  # 如果不使用超参数进化
         # 开始训练
         # print('-----执行！')
 
@@ -1070,10 +1071,12 @@ def run(**kwargs):
         setattr(opt, k, v)
     main(opt)
 
+
 def AddGussianNoise(inputs: torch.Tensor, noise_factor: float) -> torch.Tensor:
     res = inputs + torch.randn_like(inputs) * noise_factor
     res = torch.clip(res, 0., 1.)
     return res
+
 
 if __name__ == "__main__":
     opt = parse_opt()

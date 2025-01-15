@@ -4,15 +4,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import sys
-sys.path.append('/home/algointern/project/EMS-YOLO-main/utils')
-
-
-from general2 import xywh2xyxy
-from metrics2 import bbox_iou
-from tal.anchor_generator import dist2bbox, make_anchors, bbox2dist
-from tal.assigner import TaskAlignedAssigner
-from torch_utils2 import de_parallel
+from utils.general2 import xywh2xyxy
+from utils.metrics2 import bbox_iou
+from utils.tal.anchor_generator import dist2bbox, make_anchors, bbox2dist
+from utils.tal.assigner import TaskAlignedAssigner
+from utils.torch_utils2 import de_parallel
 
 
 def smooth_BCE(eps=0.1):  # https://github.com/ultralytics/yolov3/issues/238#issuecomment-598028441
@@ -75,7 +71,7 @@ class BboxLoss(nn.Module):
         pred_bboxes_pos = torch.masked_select(pred_bboxes, bbox_mask).view(-1, 4)
         target_bboxes_pos = torch.masked_select(target_bboxes, bbox_mask).view(-1, 4)
         bbox_weight = torch.masked_select(target_scores.sum(-1), fg_mask).unsqueeze(-1)
-        
+
         iou = bbox_iou(pred_bboxes_pos, target_bboxes_pos, xywh=False, SIoU=True)
         loss_iou = 1.0 - iou
 
@@ -218,6 +214,7 @@ class ComputeLoss:
 
         return loss.sum() * batch_size, loss.detach()  # loss(box, cls, dfl)
 
+
 class ComputeLoss2:
     # Compute losses
     def __init__(self, model, use_dfl=True, tal_topk=10):
@@ -249,7 +246,7 @@ class ComputeLoss2:
         self.assigner = TaskAlignedAssigner(topk=tal_topk,
                                             num_classes=self.nc,
                                             alpha=0.5,
-                                            beta=0.6)
+                                            beta=6.0)
         self.bbox_loss = BboxLoss(m.reg_max - 1, use_dfl=use_dfl).to(device)
         self.proj = torch.arange(m.reg_max).float().to(device)  # / 120.0
         self.use_dfl = use_dfl
@@ -328,6 +325,7 @@ class ComputeLoss2:
         loss[2] *= 1.5  # dfl gain
 
         return loss.sum() * batch_size, loss.detach()  # loss(box, cls, dfl)
+
 
 class v10DetectLoss:
     def __init__(self, model):
